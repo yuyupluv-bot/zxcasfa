@@ -1,0 +1,67 @@
+name: Validate Docker release
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile Python
+        run: python -m compileall -q .
+      - name: Run all regression tests
+        run: python -m unittest discover -s tests -p 'test_*.py'
+      - name: Validate Compose interpolation
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          rm -f .env
+
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-driver-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - name: Create CI-only Firebase configuration
+        run: |
+          cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "1234567890",
+              "project_id": "ci-placeholder",
+              "storage_bucket": "ci-placeholder.appspot.com"
+            },
+            "client": [{
+              "client_info": {
+                "mobilesdk_app_id": "1:1234567890:android:0000000000000000",
+                "android_client_info": {
+                  "package_name": "ru.taxi.driveralerts"
+                }
+              },
+              "api_key": [{"current_key": "AIzaSyCIPlaceholderKeyNotUsedAtRuntime"}]
+            }],
+            "configuration_version": "1"
+          }
+          JSON
+      - name: Compile and lint Android application
+        run: >
+          gradle :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+          -PDRIVER_APP_SERVER_URL=https://example.com
+          -PPRIVACY_POLICY_URL=https://example.com/privacy

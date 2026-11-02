@@ -1,0 +1,232 @@
+name: vk-taxi
+
+x-app-environment: &app-environment
+  TZ: ${TZ:-Asia/Yekaterinburg}
+  DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-taxi}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-taxi}
+
+  VK_TOKEN: ${VK_TOKEN}
+  VK_CHAT_USER_TOKEN: ${VK_CHAT_USER_TOKEN:-}
+  VK_GROUP_ID: ${VK_GROUP_ID}
+  VK_API_VERSION: ${VK_API_VERSION:-5.199}
+  ADMIN_VK_IDS: ${ADMIN_VK_IDS:-}
+
+  SECRET_KEY: ${SECRET_KEY}
+  ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+  ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+  FLASK_COOKIE_SECURE: ${FLASK_COOKIE_SECURE:-0}
+  WEB_WORKERS: ${WEB_WORKERS:-1}
+  WEB_THREADS: ${WEB_THREADS:-4}
+
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+  DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-10}
+  DB_POOL_RECYCLE: ${DB_POOL_RECYCLE:-280}
+
+  BOT_WORKERS: ${BOT_WORKERS:-16}
+  BOT_MAX_PENDING_EVENTS: ${BOT_MAX_PENDING_EVENTS:-1000}
+  OUTBOX_WORKERS: ${OUTBOX_WORKERS:-8}
+  TIMER_WORKERS: ${TIMER_WORKERS:-8}
+  SETTINGS_CACHE_TTL: ${SETTINGS_CACHE_TTL:-30}
+  MAINTENANCE_INTERVAL: ${MAINTENANCE_INTERVAL:-60}
+  PROCESSED_EVENTS_RETENTION_HOURS: ${PROCESSED_EVENTS_RETENTION_HOURS:-12}
+  OUTBOX_RETENTION_HOURS: ${OUTBOX_RETENTION_HOURS:-24}
+
+  DRIVER_FALLBACK_CHAT_PEER_ID: ${DRIVER_FALLBACK_CHAT_PEER_ID:-0}
+  DRIVER_CHAT_PEER_ID: ${DRIVER_CHAT_PEER_ID:-0}
+  DRIVER_ACCEPT_TIMEOUT: ${DRIVER_ACCEPT_TIMEOUT:-60}
+  DRIVER_CHAT_TIMEOUT: ${DRIVER_CHAT_TIMEOUT:-2700}
+  DISPATCHER_COMMISSION: ${DISPATCHER_COMMISSION:-0.10}
+  PASSENGER_POLL_TIMEOUT: ${PASSENGER_POLL_TIMEOUT:-60}
+
+  VERIFY_ENABLED: ${VERIFY_ENABLED:-true}
+  VERIFY_MIN_FRIENDS: ${VERIFY_MIN_FRIENDS:-10}
+  VERIFY_MIN_ACCOUNT_MONTHS: ${VERIFY_MIN_ACCOUNT_MONTHS:-6}
+  VERIFY_TTL_DAYS: ${VERIFY_TTL_DAYS:-30}
+
+  MAPS_PROVIDER: ${MAPS_PROVIDER:-yandex}
+  MAPS_API_KEY: ${MAPS_API_KEY:-}
+  SUPPORT_LINK: ${SUPPORT_LINK:-https://vk.me/club0}
+  FREE_WAITING_MINUTES: ${FREE_WAITING_MINUTES:-3}
+  PRICE_PER_WAITING_MINUTE: ${PRICE_PER_WAITING_MINUTE:-10}
+  PENALTY_FINE: ${PENALTY_FINE:-200}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  FIREBASE_SERVICE_ACCOUNT_FILE: ${FIREBASE_SERVICE_ACCOUNT_FILE:-/app/secrets/firebase-service-account.json}
+  FIREBASE_SERVICE_ACCOUNT_B64: ${FIREBASE_SERVICE_ACCOUNT_B64:-}
+  VK_BOT_URL: ${VK_BOT_URL:-https://vk.me/club0}
+  PUSH_SOUND_DIR: ${PUSH_SOUND_DIR:-/app/data/push_sounds}
+
+x-app-common: &app-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: vk-taxi-app:v180
+  pull_policy: build
+  environment:
+    <<: *app-environment
+  networks:
+    - taxi-internal
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      POSTGRES_DB: ${POSTGRES_DB:-taxi}
+      POSTGRES_USER: ${POSTGRES_USER:-taxi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-taxi} -d ${POSTGRES_DB:-taxi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - taxi-internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  migrate:
+    <<: *app-common
+    restart: "no"
+    command:
+      - python
+      - -c
+      - "from common.db_migrate import ensure_schema; raise SystemExit(0 if ensure_schema() else 1)"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  bot:
+    <<: *app-common
+    restart: unless-stopped
+    init: true
+    command: ["python", "main.py"]
+    environment:
+      <<: *app-environment
+      DB_STATEMENT_TIMEOUT_MS: ${BOT_DB_STATEMENT_TIMEOUT_MS:-30000}
+      DB_LOCK_TIMEOUT_MS: ${BOT_DB_LOCK_TIMEOUT_MS:-5000}
+      DB_IDLE_TRANSACTION_TIMEOUT_MS: ${BOT_DB_IDLE_TRANSACTION_TIMEOUT_MS:-60000}
+      BOT_WATCHDOG_ENABLED: ${BOT_WATCHDOG_ENABLED:-1}
+      BOT_TASK_TIMEOUT: ${BOT_TASK_TIMEOUT:-180}
+      BOT_STARTUP_TIMEOUT: ${BOT_STARTUP_TIMEOUT:-180}
+      BOT_POLL_STALL_TIMEOUT: ${BOT_POLL_STALL_TIMEOUT:-90}
+      BOT_OUTBOX_STALL_TIMEOUT: ${BOT_OUTBOX_STALL_TIMEOUT:-90}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - bot_logs:/app/logs
+      - ./secrets:/app/secrets:ro
+    stop_grace_period: 30s
+
+  push-sounds-init:
+    image: alpine:3.20
+    restart: "no"
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 999:999 /data/push_sounds && chmod -R 775 /data/push_sounds"]
+    volumes:
+      - push_sounds:/data/push_sounds
+    networks:
+      - taxi-internal
+
+  admin:
+    <<: *app-common
+    restart: unless-stopped
+    init: true
+    command: ["python", "admin_main.py"]
+    environment:
+      <<: *app-environment
+      PORT: "3000"
+      AUTO_MIGRATE_ON_START: "0"
+      ADMIN_WATCHDOG_ENABLED: ${ADMIN_WATCHDOG_ENABLED:-1}
+      ADMIN_WATCHDOG_INTERVAL: ${ADMIN_WATCHDOG_INTERVAL:-15}
+      ADMIN_WATCHDOG_FAILURES: ${ADMIN_WATCHDOG_FAILURES:-4}
+      ADMIN_WATCHDOG_TIMEOUT: ${ADMIN_WATCHDOG_TIMEOUT:-3}
+      ADMIN_WATCHDOG_STARTUP_GRACE: ${ADMIN_WATCHDOG_STARTUP_GRACE:-120}
+      WEB_TIMEOUT: ${WEB_TIMEOUT:-60}
+      WEB_GRACEFUL_TIMEOUT: ${WEB_GRACEFUL_TIMEOUT:-30}
+      WEB_MAX_REQUESTS: ${WEB_MAX_REQUESTS:-2000}
+      WEB_MAX_REQUESTS_JITTER: ${WEB_MAX_REQUESTS_JITTER:-200}
+      DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-5}
+      DB_STATEMENT_TIMEOUT_MS: ${ADMIN_DB_STATEMENT_TIMEOUT_MS:-30000}
+      DB_LOCK_TIMEOUT_MS: ${ADMIN_DB_LOCK_TIMEOUT_MS:-5000}
+      DB_IDLE_TRANSACTION_TIMEOUT_MS: ${ADMIN_DB_IDLE_TRANSACTION_TIMEOUT_MS:-60000}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      push-sounds-init:
+        condition: service_completed_successfully
+    ports:
+      - "${ADMIN_BIND_IP:-0.0.0.0}:${ADMIN_PORT:-3000}:3000"
+    volumes:
+      - admin_logs:/app/logs
+      - push_sounds:/app/data/push_sounds
+      - ./secrets:/app/secrets:ro
+      - ./downloads:/app/downloads:ro
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+
+  driver-geo:
+    <<: *app-common
+    profiles: ["driver-maps"]
+    restart: unless-stopped
+    command: ["python", "-m", "gunicorn", "web.driver_geo:app", "--bind", "0.0.0.0:3100", "--workers", "1", "--threads", "4", "--timeout", "30"]
+    environment:
+      <<: *app-environment
+      DRIVER_GEO_DATA: /app/geo/data
+      DRIVER_GEO_PUBLIC_URL: ${DRIVER_GEO_PUBLIC_URL:-https://panel.bezrateadminps.ru}
+      DRIVER_ROUTER_URL: http://driver-router:5000
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "1"
+      DB_STATEMENT_TIMEOUT_MS: "5000"
+    volumes:
+      - ./geo/data:/app/geo/data:ro
+    ports: ["127.0.0.1:3100:3100"]
+    mem_limit: 384m
+    cpus: 0.5
+
+  driver-router:
+    image: ghcr.io/project-osrm/osrm-backend:v5.27.1
+    profiles: ["driver-maps"]
+    restart: unless-stopped
+    command: ["osrm-routed", "--algorithm", "mld", "--threads", "1", "/data/region.osrm"]
+    volumes: ["./geo/data:/data:ro"]
+    networks: [taxi-internal]
+    mem_limit: 768m
+    cpus: 0.5
+
+networks:
+  taxi-internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: vk_taxi_postgres_data
+  bot_logs:
+    name: vk_taxi_bot_logs
+  admin_logs:
+    name: vk_taxi_admin_logs
+  push_sounds:
+    name: vk_taxi_push_sounds

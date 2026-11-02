@@ -1,0 +1,1394 @@
+--- a/bot/handlers.py
++++ b/bot/handlers.py
+@@ -1830,7 +1830,7 @@
+         return retired_price_calculator(session, user)
+ 
+     active = active_order_for(session, user)
+-    if active and active.driver_id and (text or attachments):
++    if active and (active.driver_id or active.parallel_driver_id) and (text or attachments):
+         # If an active ride already has a driver, free text is always treated
+         # as an in-bot chat message. This also recovers gracefully if the chat
+         # FSM state was overwritten by another informational message.
+@@ -2766,33 +2766,32 @@
+     order = passenger_order_for(session, user, order_id)
+     if not order or order.status not in ("assigned", "arrived", "in_progress"):
+         return show_main_menu(session, user)
++    if cancel and order.status == "in_progress":
++        return passenger_cancel(session, user, order.id)
+     driver = session.get(User, order.driver_id) if order.driver_id else None
+     prompt_id = order.departure_prompt_outbox_id
+-    if cancel:
+-        if prompt_id:
+-            from . import outbox_service
+-            outbox_service.cancel_or_delete(session, prompt_id)
+-            order.departure_prompt_outbox_id = None
+-        return passenger_cancel_request(session, user, order.id)
+     if not prompt_id:
+-        return  # Duplicate/stale Yes callback: no second driver notice.
+-    if driver:
++        return  # Duplicate/stale callback must not notify or cancel again.
++    if driver and not cancel:
+         vk.send_message(driver.vk_id, "Клиент ожидает вас на месте")
+     if prompt_id:
+         from . import outbox_service
+         prompt = session.get(OutboxMessage, prompt_id)
+         final_text = (prompt.text or "").rstrip() if prompt else ""
+-        # Preserve driver/car/ETA, remove the answered question and its
+-        # inline buttons. No separate passenger acknowledgement is sent.
+-        final_text = re.sub(r"\s*(?:Ждете\?|Вы ждёте машинку\?)\s*$", "", final_text)
+-        if final_text:
+-            outbox_service.finalize_tracked_message(
+-                session, prompt_id, final_text, replace_text=True,
+-                replacement_keyboard='{"buttons":[],"inline":true}',
+-            )
+-        else:
+-            outbox_service.cancel_or_delete(session, prompt_id)
++        # Keep car/driver/ETA in this same card. Edits use the durable outbox
++        # so a transient VK failure cannot leave live confirmation buttons.
++        final_text = re.sub(
++            r"\s*(?:(?:Вы )?[Жж]д[её]те(?: машинку)?\?)\s*$", "", final_text
++        ).rstrip()
++        outcome = "❌ Заявка отменена." if cancel else "Машинка в пути"
++        final_text = f"{final_text}\n{outcome}".lstrip()
++        outbox_service.finalize_tracked_message(
++            session, prompt_id, final_text, replace_text=True, defer_edit=True,
++            replacement_keyboard='{"buttons":[],"inline":true}',
++        )
+     order.departure_prompt_outbox_id = None
++    if cancel:
++        return passenger_cancel(session, user, order.id)
+     order.actuality_confirmed = True
+     set_state(session, user.vk_id, States.P_IN_RIDE, {"order_id": order.id})
+ 
+@@ -3154,6 +3153,25 @@
+     set_state(session, user.vk_id, States.P_ARRIVED, {"order_id": order.id})
+ 
+ 
++def driver_chat_order_for(session: Session, user: User, order_id=None) -> Order | None:
++    """An explicit chat binding wins over the driver's other (current) ride."""
++    if order_id is None:
++        return active_order_for(session, user, as_driver=True)
++    try:
++        order_id = int(order_id)
++    except (TypeError, ValueError):
++        return None
++    return (
++        session.query(Order)
++        .filter(
++            Order.id == order_id,
++            Order.status.in_(("assigned", "arrived", "in_progress", "parallel_assigned")),
++            (Order.driver_id == user.id) | (Order.parallel_driver_id == user.id),
++        )
++        .one_or_none()
++    )
++
++
+ def enter_chat(
+     session: Session,
+     user: User,
+@@ -3161,7 +3179,7 @@
+     order_id=None,
+ ) -> None:
+     order = (
+-        active_order_for(session, user, as_driver=True)
++        driver_chat_order_for(session, user, order_id)
+         if driver else passenger_order_for(session, user, order_id)
+     )
+     if not order:
+@@ -3178,12 +3196,17 @@
+ def exit_chat(session: Session, user: User, driver: bool) -> None:
+     saved_order_id = get_data(session, user.vk_id).get("order_id")
+     order = (
+-        active_order_for(session, user, as_driver=True)
++        driver_chat_order_for(session, user, saved_order_id)
+         if driver else passenger_order_for(session, user, saved_order_id)
+     )
+     vk.send_message(user.vk_id, "Чат завершён.")
+     if order:
+-        set_state(session, user.vk_id, States.D_IN_RIDE if driver else States.P_IN_RIDE, {"order_id": order.id})
++        if driver and order.status == "parallel_assigned":
++            order = active_order_for(session, user, as_driver=True)
++        if order:
++            set_state(session, user.vk_id, States.D_IN_RIDE if driver else States.P_IN_RIDE, {"order_id": order.id})
++        else:
++            reset(session, user.vk_id, States.D_MENU if driver else States.MAIN_MENU)
+     else:
+         reset(session, user.vk_id, States.D_MENU if driver else States.MAIN_MENU)
+ 
+@@ -3191,7 +3214,7 @@
+ def chat_forward(session: Session, user: User, text: str, attachments, driver: bool) -> None:
+     saved_order_id = get_data(session, user.vk_id).get("order_id")
+     order = (
+-        active_order_for(session, user, as_driver=True)
++        driver_chat_order_for(session, user, saved_order_id)
+         if driver else passenger_order_for(session, user, saved_order_id)
+     )
+     if not order:
+@@ -3210,7 +3233,7 @@
+         .filter(Order.id == int(order_id or 0), Order.dispatcher_id == user.id)
+         .one_or_none()
+     )
+-    if not order or not order.driver_id or order.status in ("cancelled", "completed"):
++    if not order or not (order.driver_id or order.parallel_driver_id) or order.status in ("cancelled", "completed"):
+         return vk.send_message(user.vk_id, "Эта заявка уже недоступна для ответа.")
+     set_state(
+         session,
+@@ -3229,7 +3252,7 @@
+         .filter(Order.id == int(order_id or 0), Order.dispatcher_id == user.id)
+         .one_or_none()
+     )
+-    if not order or not order.driver_id or order.status in ("cancelled", "completed"):
++    if not order or not (order.driver_id or order.parallel_driver_id) or order.status in ("cancelled", "completed"):
+         reset(session, user.vk_id, States.DISP_MENU)
+         return vk.send_message(user.vk_id, "Эта заявка уже недоступна для ответа.")
+     if not relay(session, order, user, text, attachments, keyboard=None):
+@@ -3421,11 +3444,11 @@
+     if cmd == "chat_depart":
+         return driver_depart_from_chat_order(session, user, payload.get("order_id"))
+     if cmd == "chat_add":
+-        return enter_chat(session, user, driver=True)
++        return enter_chat(session, user, driver=True, order_id=payload.get("order_id"))
+     if cmd == "chat_stop":
+         return exit_chat(session, user, driver=True)
+     if cmd == "chat":
+-        return enter_chat(session, user, driver=True)
++        return enter_chat(session, user, driver=True, order_id=payload.get("order_id"))
+     if cmd == "exit_chat":
+         return exit_chat(session, user, driver=True)
+     if cmd == "fake_calls":
+@@ -4450,7 +4473,10 @@
+     vk.send_message(
+         user.vk_id,
+         "Почему отклоняете заявку?",
+-        keyboard=kb.decline_reasons_keyboard(order_id, customer_price_service.has_price(order)),
++        keyboard=kb.decline_reasons_keyboard(
++            order_id, customer_price_service.has_price(order),
++            allow_chat_handoff=not bool(order.requested_driver_id),
++        ),
+     )
+     set_state(session, user.vk_id, States.D_DECLINE_REASON, {"order_id": order_id})
+ 
+@@ -4512,7 +4538,7 @@
+             reset(session, passenger.vk_id, States.MAIN_MENU)
+             vk.send_message(
+                 passenger.vk_id,
+-                "Выбранный водитель отказался от заявки. Она не передавалась другим водителям.",
++                "Данный водитель не может взять заказ. Попробуйте выбрать другого водителя.",
+                 keyboard=kb.direct_driver_unavailable_keyboard(),
+             )
+         audit.record(
+@@ -4521,6 +4547,47 @@
+             f"order={order.id} driver={user.id} reason={cat}",
+         )
+         passenger_queue.try_promote(session)
++        return
++
++    # Explicit handoff is not an ordinary refusal/FIFO retry. Keep this
++    # driver first and exclude them from being re-offered this same request.
++    if cat == "to_driver_chat":
++        previous_decline = {
++            field: getattr(order, field)
++            for field in ("declined_driver_ids", "decline_count",
++                          "decline_reasons_json", "last_decline_reason")
++        }
++        order_service.add_decline(session, order, user.id, cat)
++        if not order_service.publish_special_decline_to_requests_chat(session, order):
++            # Fail closed: never promise a handoff when chat is unavailable.
++            # Restore the old offer so the driver can retry or pick a reason.
++            order.status = "searching"
++            for field, value in previous_decline.items():
++                setattr(order, field, value)
++            order_service._set_current_offer(session, order, user.id)
++            queue_service.mark_offered(session, user)
++            set_state(session, user.vk_id, States.D_OFFER, {"order_id": order.id})
++            order.offer_outbox_id = vk.send_tracked_message(
++                user.vk_id,
++                f"Заявка #{order.number}: {order_service.order_text(order)}\n"
++                "Не удалось отправить заявку в водительскую. Повторите действие или выберите другую причину.",
++                keyboard=kb.order_offer_keyboard(order.id, customer_price_service.has_price(order)),
++                attachment=vk.prepare_voice_attachment(user.vk_id, order.voice_attachment),
++            )
++            timers.schedule(
++                "accept", order.id, get_int(session, "driver_accept_timeout", 60),
++                lambda: order_service._accept_timeout(order.id, user.id),
++            )
++            return
++        passenger_queue.remove(session, order.id)
++        queue_service.move_to_front(session, user)
++        set_state(session, user.vk_id, States.D_MENU, {"order_id": None}, merge=False)
++        vk.send_message(
++            user.vk_id,
++            "✅ Заявка отправлена в водительскую. Вы остаётесь первым в очереди.",
++            keyboard=on_line_kb,
++        )
++        audit.record(session, "driver_chat_handoff", f"order={order.id} driver={user.id}")
+         return
+ 
+     # --- «Бронь»: timed rides must be created through the booking flow ----- #
+@@ -4691,8 +4758,6 @@
+     # accepted-order/ETA card is a new tracked message, so attach the prepared
+     # community-owned voice again instead of relying only on the old card.
+     voice_attachment = vk.prepare_voice_attachment(user.vk_id, order.voice_attachment)
+-    if voice_attachment:
+-        order.voice_attachment = voice_attachment
+     order.offer_outbox_id = vk.send_tracked_message(
+         user.vk_id,
+         text,
+@@ -4855,7 +4920,7 @@
+             else:
+                 header = ""
+                 eta_line = f"\n⏰ Будет через {eta} мин."
+-                question = "Ждете?"
++                question = "Ждёте машинку?"
+             card = (
+                 _driver_card(user) if is_partner_delivery
+                 else order_service.departure_driver_card_text(assigned_driver)
+@@ -4868,17 +4933,11 @@
+                     keyboard=kb.passenger_ride_keyboard(order.id),
+                 )
+             else:
+-                # VK cannot attach persistent and inline keyboards to one
+-                # message. Send the durable driver card with the main menu,
+-                # then a separate short question with temporary Да/Нет.
+-                vk.send_message(
+-                    target.vk_id,
+-                    car_prefix + header + card + eta_line,
+-                    keyboard=kb.passenger_ride_keyboard(order.id),
+-                )
++                # One tracked card contains the driver, car, ETA and question.
++                # Replying edits this exact card and removes its Yes/No keys.
+                 order.departure_prompt_outbox_id = vk.send_tracked_message(
+                     target.vk_id,
+-                    question,
++                    car_prefix + header + card + eta_line + "\n" + question,
+                     keyboard=kb.passenger_departure_keyboard(order.id),
+                 )
+             set_state(session, target.vk_id, States.P_IN_RIDE, {"order_id": order.id})
+@@ -5472,7 +5531,7 @@
+             if not delivery_service.is_partner_delivery(order):
+                 vk.send_message(
+                     passenger.vk_id,
+-                    "🧾 Итог по поездке #%d:\nИтого: %.0f ₽%s" % (order.id, total, payment_block),
++                    "🧾 Итог по поездке #%d:\nИтого: %.0f ₽%s" % (order.number, total, payment_block),
+                 )
+             rating_text, rating_file = bm.render(session, "ride_finished", total=f"{total:.0f}")
+             order.passenger_rating_prompt_outbox_id = vk.send_tracked_message(
+@@ -7768,7 +7827,7 @@
+             order.actuality_confirmed = True
+             vk.send_message(
+                 driver.vk_id,
+-                "Клиент по параллельной заявке подтвердил: «Дожду». Клиент ждёт вас.",
++                "Клиент по параллельной заявке подтвердил: «Да, жду». Клиент ждёт вас.",
+             )
+             vk.send_message(
+                 user.vk_id,
+--- a/bot/keyboards.py
++++ b/bot/keyboards.py
+@@ -410,8 +410,8 @@
+ 
+ def parallel_actuality_keyboard(order_id: int) -> str:
+     return keyboard([
+-        [_btn("✅ Дожду", GREEN, {"cmd": "chat_order_actual_yes", "order_id": order_id})],
+-        [_btn("❌ Не жду", RED, {"cmd": "chat_order_actual_no", "order_id": order_id})],
++        [_btn("✅ Да, жду", GREEN, {"cmd": "chat_order_actual_yes", "order_id": order_id})],
++        [_btn("❌ Нет, отменяю заявку", RED, {"cmd": "chat_order_actual_no", "order_id": order_id})],
+     ], inline=True)
+ 
+ 
+@@ -821,7 +821,9 @@
+     return keyboard(rows, inline=True)
+ 
+ 
+-def decline_reasons_keyboard(order_id: int, has_customer_price: bool = False) -> str:
++def decline_reasons_keyboard(
++    order_id: int, has_customer_price: bool = False, allow_chat_handoff: bool = True
++) -> str:
+     reasons = [
+         ("🚗 Дальние расстояния", "far"),
+         ("📦 Доставка", "delivery"),
+@@ -833,6 +835,8 @@
+     ]
+     if has_customer_price:
+         reasons.append(("💰 Маленькая стоимость", "low_price"))
++    if allow_chat_handoff:
++        reasons.append(("📣 Отдать в водительскую", "to_driver_chat"))
+     rows = [[_btn(label, WHITE, {"cmd": "decline_reason", "order_id": order_id, "cat": cat})]
+             for label, cat in reasons]
+     rows.append([_btn("⬅️ Назад", WHITE, {"cmd": "decline_back", "order_id": order_id})])
+@@ -941,6 +945,8 @@
+ 
+ def parallel_reserved_keyboard(order_id: int) -> str:
+     return keyboard([
++        [_btn("✉️ Связаться с пассажиром", BLUE,
++              {"cmd": "chat", "order_id": order_id})],
+         [_btn("➕ Добавить время к подаче авто", BLUE,
+               {"cmd": "parallel_eta_add", "order_id": order_id})],
+         [_btn("❌ Отказаться от параллельной заявки", RED,
+--- a/bot/messaging.py
++++ b/bot/messaging.py
+@@ -14,10 +14,17 @@
+ from .states_service import States, get_state, set_state
+ 
+ 
+-def _counterpart(order: Order, sender: User) -> User | None:
++def _counterpart(order: Order, sender: User, session: Session) -> User | None:
++    """Only participants of this exact ride may relay to one another."""
+     if sender.id == order.passenger_id:
+-        return order.driver
+-    return order.passenger
++        driver_id = order.driver_id or order.parallel_driver_id
++        return session.get(User, driver_id) if driver_id else None
++    if sender.id in (order.driver_id, order.parallel_driver_id):
++        return session.get(User, order.dispatcher_id or order.passenger_id)
++    if order.dispatcher_id and sender.id == order.dispatcher_id:
++        driver_id = order.driver_id or order.parallel_driver_id
++        return session.get(User, driver_id) if driver_id else None
++    return None
+ 
+ 
+ def relay(
+@@ -32,12 +39,14 @@
+ 
+     Returns True on success, False if there is no counterpart yet.
+     """
+-    target = _counterpart(order, sender)
++    if order.status not in ("assigned", "arrived", "in_progress", "parallel_assigned"):
++        return False
++    target = _counterpart(order, sender, session)
+     if target is None:
+         return False
+ 
+     sender_label = f"[id{sender.vk_id}|{sender.full_name or ('id' + str(sender.vk_id))}]"
+-    if order.dispatcher_id and sender.id == order.driver_id:
++    if order.dispatcher_id and sender.id in (order.driver_id, order.parallel_driver_id):
+         prefix = f"✉️ По заявке #{order.number} написал водитель {sender_label}:\n"
+         keyboard = kb.dispatcher_reply_keyboard(order.id, order.number)
+     elif order.dispatcher_id and sender.id == order.dispatcher_id:
+@@ -59,9 +68,16 @@
+             # the direct image links instead.
+             links = []
+             for att in raw_attachments:
+-                if att.get("type") != "photo":
+-                    continue
+-                url = vk.photo_source_url(att.get("photo") or {})
++                kind = att.get("type")
++                if kind == "photo":
++                    url = vk.photo_source_url(att.get("photo") or {})
++                elif kind == "audio_message":
++                    url = vk._voice_url(att.get("audio_message") or {})
++                elif kind == "doc":
++                    doc = att.get("doc") or {}
++                    url = vk._voice_url(doc) if int(doc.get("type") or 0) == 5 else None
++                else:
++                    url = None
+                 if url:
+                     links.append(url)
+             if links:
+@@ -87,10 +103,17 @@
+         States.D_PARALLEL_ETA,
+         States.D_PARALLEL_ETA_ADD,
+         States.P_DELIVERY_CONFIRM,
++        States.D_ETA_MENU,
++        States.D_CHAT_ORDER_WAIT,
++        States.P_CHAT_ORDER_CONFIRM,
+     }
+     if target.role != ROLE_DISPATCHER and current_state not in protected_input_states:
+         # For neutral ride states, keep the convenient immediate-reply mode.
+-        target_state = States.D_CHAT if target.id == order.driver_id else States.P_CHAT
++        target_state = (
++            States.D_CHAT
++            if target.id in (order.driver_id, order.parallel_driver_id)
++            else States.P_CHAT
++        )
+         set_state(session, target.vk_id, target_state, {"order_id": order.id})
+ 
+     session.add(
+--- a/bot/order_service.py
++++ b/bot/order_service.py
+@@ -3,6 +3,7 @@
+ 
+ import datetime as dt
+ import json
++import re
+ 
+ from sqlalchemy.orm import Session
+ 
+@@ -411,6 +412,9 @@
+     reason_label = ("Маленькая стоимость" if "low_price" in reasons else
+                     "Доставка" if is_delivery_type(order) or "delivery" in reasons else
+                     "Дальнее расстояние")
++    chat_handoff = getattr(order, "last_decline_reason", None) == "to_driver_chat"
++    if chat_handoff:
++        reason_label = "Отдать в водительскую"
+     peer_id = normalize_driver_chat_peer_id(get_int(session, "driver_fallback_chat_peer_id", 0))
+     if not creator or not peer_id:
+         log.error("Requests chat is not configured for special decline order=%s", order.id)
+@@ -429,6 +433,7 @@
+         )
+     order.chat_notice_outbox_id = send_fallback_chat_tracked_notice(
+         session,
++        ("@all\n" if chat_handoff else "") +
+         f"🔔 Заявка №{order.number}\nПричина: {reason_label}\n"
+         f"Маршрут: {order_text(order)}\n"
+         + (f"💰 Цена клиента: {float(order.customer_price):.0f} ₽\n" if order.customer_price is not None else "")
+@@ -441,9 +446,13 @@
+         return False
+     vk.send_message(
+         creator.vk_id,
+-        "Заявка сразу отправлена в чат заявок. Ожидаем, согласится ли водитель.",
++        ("✅ Активно ищем водителя в чате, ожидайте"
++         if chat_handoff else
++         "Заявка сразу отправлена в чат заявок. Ожидаем, согласится ли водитель."),
+         keyboard=kb.passenger_waiting_keyboard(order.id),
+     )
++    if chat_handoff and not order.dispatcher_id:
++        set_state(session, creator.vk_id, States.P_WAITING, {"order_id": order.id}, merge=False)
+     timers.schedule(
+         "driver_chat", order.id, CHAT_UNCLAIMED_TIMEOUT_SECONDS,
+         lambda: _driver_chat_timeout(order.id),
+@@ -549,8 +558,6 @@
+     if is_delivery_type(order):
+         text += "\nℹ️ При отказе от доставки водитель остаётся на своём месте в очереди."
+     prepared_voice = vk.prepare_voice_attachment(driver.vk_id, order.voice_attachment)
+-    if prepared_voice:
+-        order.voice_attachment = prepared_voice
+     order.offer_outbox_id = vk.send_tracked_message(
+         driver.vk_id,
+         text,
+@@ -701,8 +708,6 @@
+     if is_delivery_type(order):
+         text += "\nℹ️ При отказе от доставки ваше место в очереди сохраняется."
+     prepared_voice = vk.prepare_voice_attachment(driver.vk_id, order.voice_attachment)
+-    if prepared_voice:
+-        order.voice_attachment = prepared_voice
+     # Track the exact offer card so its inline Поехать/Отказаться controls can
+     # be removed immediately after the driver answers.
+     order.offer_outbox_id = vk.send_tracked_message(
+@@ -903,10 +908,16 @@
+         if prompt and (prompt.text or "").strip() == "Ждете?":
+             outbox_service.cancel_or_delete(session, order.departure_prompt_outbox_id)
+         else:
++            final_text = re.sub(
++                r"\s*(?:(?:Вы )?[Жж]д[её]те(?: машинку)?\?)\s*$",
++                "", (prompt.text or "") if prompt else "",
++            ).rstrip()
+             outbox_service.finalize_tracked_message(
+                 session,
+                 order.departure_prompt_outbox_id,
+-                "",
++                final_text,
++                replace_text=True,
++                defer_edit=True,
+             )
+         order.departure_prompt_outbox_id = None
+     order.status = "arrived"
+--- a/bot/parallel_orders.py
++++ b/bot/parallel_orders.py
+@@ -733,8 +733,6 @@
+     if not driver:
+         return False
+     prepared_voice = vk.prepare_voice_attachment(driver.vk_id, order.voice_attachment)
+-    if prepared_voice:
+-        order.voice_attachment = prepared_voice
+     outbox_id = vk.send_tracked_message(
+         driver.vk_id,
+         _route_offer_card_text(session, order),
+@@ -805,7 +803,7 @@
+             driver.vk_id,
+             f"У вас уже закреплена параллельная заявка #{reserved.number}:\n{route}",
+             keyboard=kb.parallel_reserved_keyboard(reserved.id),
+-            attachment=reserved.voice_attachment,
++            attachment=vk.prepare_voice_attachment(driver.vk_id, reserved.voice_attachment),
+         )
+     rows = _destination_restricted_orders(current, available(session))
+     if not rows:
+@@ -935,7 +933,7 @@
+         driver.vk_id,
+         eta_prompt,
+         keyboard=kb.parallel_eta_keyboard(order.id),
+-        attachment=order.voice_attachment,
++        attachment=vk.prepare_voice_attachment(driver.vk_id, order.voice_attachment),
+     )
+     from . import push_service
+     push_service.send(session, driver.id, "parallel_order", order)
+@@ -943,7 +941,7 @@
+ 
+ 
+ def prompt_eta_after_actuality(session: Session, driver: User, order: Order) -> None:
+-    """Continue a reserved parallel claim after the passenger presses «Дожду»."""
++    """Continue a reserved parallel claim after the passenger presses «Да, жду»."""
+     if order.status != "parallel_assigned" or order.parallel_driver_id != driver.id:
+         return vk.send_message(driver.vk_id, "Параллельная заявка уже недоступна.")
+     timers.schedule("parallel_eta", order.id, 120, lambda: _eta_timeout(order.id))
+@@ -958,7 +956,7 @@
+         f"Пассажир: {passenger_label}\n✅ Клиент ждёт вас по параллельной заявке #{order.number}.\n"
+         f"Ваша заявка: {route}\n\nЧерез сколько вы будете у клиента?",
+         keyboard=kb.parallel_eta_keyboard(order.id),
+-        attachment=order.voice_attachment,
++        attachment=vk.prepare_voice_attachment(driver.vk_id, order.voice_attachment),
+     )
+     from . import push_service
+     push_service.send(session, driver.id, "parallel_order", order)
+@@ -1182,7 +1180,8 @@
+             session,
+             outbox_id,
+             text,
+-            attachment=order.voice_attachment,
++            # The outbox row already owns the attachment uploaded for its peer.
++            # order.voice_attachment may be original JSON metadata, not a VK id.
+             replace_text=replace_text,
+         )
+     _clear_route_offer_state(order)
+@@ -1576,16 +1575,21 @@
+     ) if promised else ""
+     from .handlers import _driver_ride_kb
+     visible_number = getattr(order, "number", order.id)
++    price_line = (
++        f"\n💰 Цена клиента: {float(order.customer_price):.0f} ₽"
++        if order.customer_price is not None else ""
++    )
+     vk.send_message(driver.vk_id,
+                     f"Переходим к заявке #{visible_number}:\n"
+-                    f"{order.route_text or order.address_to}{timing}",
+-                    keyboard=_driver_ride_kb(session, order))
++                    f"{order_service.order_text(order)}{price_line}{timing}",
++                    keyboard=_driver_ride_kb(session, order),
++                    attachment=vk.prepare_voice_attachment(driver.vk_id, order.voice_attachment))
+     passenger = session.get(User, order.passenger_id)
+     # A dispatcher has already received assignment, driver/car and ETA details.
+     # Do not send a separate "driver is free" notification on transition.
+     if passenger and not order.dispatcher_id:
+         vk.send_message(passenger.vk_id, "🚕 Водитель освободился и теперь выезжает к вам.",
+-                        keyboard=kb.passenger_ride_keyboard())
++                        keyboard=kb.passenger_ride_keyboard(order.id))
+     return order
+ 
+ def has_pending(session: Session, driver: User) -> bool:
+--- a/bot/vk_client.py
++++ b/bot/vk_client.py
+@@ -193,7 +193,7 @@
+         # cancelled by the per-peer low-priority backlog guard.
+         if "Реквизиты для оплаты" in value:
+             return 5_000
+-        if value == "Ждете?":
++        if value == "Ждете?" or value.endswith("\nЖдёте машинку?"):
+             return 2_000
+         # Completion and parallel transition are emitted in one transaction.
+         # Give completion an absolute outbox priority so it is delivered first,
+@@ -919,13 +919,22 @@
+         empty-text media messages we fetch the full message by conversation id
+         before routing it through the passenger/driver FSM.
+         """
+-        raw = message.get("attachments") or []
+-        if isinstance(raw, (list, tuple)) and raw:
+-            return [item for item in raw if isinstance(item, dict)]
+-        if isinstance(raw, dict) and raw:
+-            values = [item for item in raw.values() if isinstance(item, dict)]
+-            if values:
+-                return values
++        def collect(item: dict, depth: int = 0) -> list[dict]:
++            # Dispatchers often FORWARD a passenger's voice. VK then keeps it
++            # in fwd_messages, not in the outer message's attachments.
++            raw = item.get("attachments") or []
++            if isinstance(raw, dict):
++                raw = list(raw.values())
++            result = [a for a in raw if isinstance(a, dict)] if isinstance(raw, (list, tuple)) else []
++            if depth < 5:
++                for forwarded in item.get("fwd_messages") or []:
++                    if isinstance(forwarded, dict):
++                        result.extend(collect(forwarded, depth + 1))
++            return result
++
++        raw = collect(message)
++        if raw:
++            return raw
+         peer_id = int(message.get("peer_id") or message.get("from_id") or 0)
+         conversation_id = int(message.get("conversation_message_id") or 0)
+         message_id = int(message.get("id") or 0)
+@@ -943,9 +952,9 @@
+                         response = self.api.messages.getById(message_ids=message_id)
+                 items = response.get("items", []) if isinstance(response, dict) else []
+                 if items:
+-                    hydrated = items[0].get("attachments") or []
+-                    if isinstance(hydrated, list):
+-                        return [item for item in hydrated if isinstance(item, dict)]
++                    hydrated = collect(items[0])
++                    if hydrated:
++                        return hydrated
+             except Exception as exc:  # noqa: BLE001
+                 if attempt == 2:
+                     log.error("Could not hydrate VK attachments: %s", exc)
+@@ -1034,6 +1043,18 @@
+         try:
+             payload = json.loads(stored)
+         except (TypeError, ValueError, json.JSONDecodeError):
++            # Legacy orders may only have a private doc id. Refresh its
++            # metadata and upload for the NEW receiving peer when possible.
++            match = re.fullmatch(r"doc(-?\d+)_(\d+)(?:_(\w+))?", str(stored))
++            if match and int(match.group(1)) != -abs(int(config.VK_GROUP_ID or 0)):
++                try:
++                    with self._api_lock:
++                        docs = self.api.docs.getById(docs=str(stored)[3:])
++                    doc = docs[0] if isinstance(docs, list) and docs else None
++                    if isinstance(doc, dict) and self._voice_url(doc):
++                        return self._reupload_voice(peer_id, doc)
++                except Exception as exc:  # noqa: BLE001
++                    log.warning("Could not refresh legacy voice for peer=%s: %s", peer_id, exc)
+             return stored
+         voice = payload.get("vk_voice") if isinstance(payload, dict) else None
+         if not isinstance(voice, dict):
+@@ -1085,12 +1106,16 @@
+             log.warning("audio_message upload failed, using document fallback: %s", exc)
+ 
+         tmp = f"/tmp/vk_{get_random_id()}_voice_message.ogg"
+-        with open(tmp, "wb") as fh:
+-            fh.write(content)
+-        saved = self.uploader.document_message(
+-            tmp, peer_id=peer_id, title="Голосовое сообщение.ogg"
+-        )
+-        return self._saved_doc_reference(saved)
++        try:
++            with open(tmp, "wb") as fh:
++                fh.write(content)
++            saved = self.uploader.document_message(
++                tmp, peer_id=peer_id, title="Голосовое сообщение.ogg"
++            )
++            return self._saved_doc_reference(saved)
++        finally:
++            with contextlib.suppress(OSError):
++                os.unlink(tmp)
+ 
+     @staticmethod
+     def photo_source_url(photo: dict) -> str | None:
+--- a/tests/test_requirements_v173_requested_changes.py
++++ b/tests/test_requirements_v173_requested_changes.py
+@@ -107,12 +107,11 @@
+         load('bot/handlers.py', '_apply_eta', scope)(session, driver, order, 2)
+         return order, vk, service
+ 
+-    def test_eta_question_is_separate_from_main_card(self):
++    def test_eta_question_and_driver_are_in_one_card_v181(self):
+         order, vk, _ = self.eta()
+         self.assertEqual(vk.send_tracked_message.call_args.args[:2],
+-                         (22, 'Ждете?'))
+-        self.assertEqual(vk.send_message.call_args_list[0].args[1],
+-                         '[id11|Водитель] 5.0\nАвто: Москвич 3, Серый, 893\n⏰ Будет через 2 мин.')
++                         (22, '[id11|Водитель] 5.0\nАвто: Москвич 3, Серый, 893\n⏰ Будет через 2 мин.\nЖдёте машинку?'))
++        self.assertFalse(any(c.args[0] == 22 for c in vk.send_message.call_args_list))
+         self.assertEqual(order.departure_prompt_outbox_id, 99)
+ 
+     def test_confirmed_eta_does_not_repeat_question(self):
+@@ -152,7 +151,8 @@
+             callback(session, user, False, 7)
+         scope['vk'].send_message.assert_called_once_with(11, 'Клиент ожидает вас на месте')
+         args = outbox.finalize_tracked_message.call_args
+-        self.assertEqual(args.args[2], 'Карточка\n⏰ Будет через 2 мин.')
++        self.assertEqual(args.args[2], 'Карточка\n⏰ Будет через 2 мин.\nМашинка в пути')
++        self.assertTrue(args.kwargs['defer_edit'])
+         self.assertTrue(args.kwargs['replace_text'])
+         scope['kb'].passenger_ride_keyboard.assert_not_called()
+         self.assertEqual(args.kwargs['replacement_keyboard'], '{"buttons":[],"inline":true}')
+--- a/tests/test_requirements_v176_passenger_and_lines.py
++++ b/tests/test_requirements_v176_passenger_and_lines.py
+@@ -190,13 +190,14 @@
+         scope['kb'].passenger_ride_keyboard.assert_called_once_with(7)
+         self.assertEqual(order.parallel_eta,5)
+ 
+-    def test_ordinary_card_has_main_menu_question_has_inline_menu(self):
++    def test_single_driver_card_has_inline_confirmation_v181(self):
+         order,vk,_=previous.MessageChangesV173().eta()
+-        first=vk.send_message.call_args_list[0]
+-        self.assertIn('⏰ Будет через 2 мин.',first.args[1])
+-        self.assertNotIn('Ждете?',first.args[1])
+-        self.assertIn('keyboard',first.kwargs)
+-        self.assertEqual(vk.send_tracked_message.call_args.args,(22,'Ждете?'))
++        card=vk.send_tracked_message.call_args
++        self.assertIn('⏰ Будет через 2 мин.',card.args[1])
++        self.assertIn('Авто: Москвич 3, Серый, 893',card.args[1])
++        self.assertIn('Ждёте машинку?',card.args[1])
++        self.assertIn('keyboard',card.kwargs)
++        self.assertFalse(any(c.args[0] == 22 for c in vk.send_message.call_args_list))
+ 
+     def test_viewing_driver_list_restores_main_menu_for_current_ride(self):
+         order=NS(id=7,status='assigned',arrival_eta=5,parallel_eta=None,driver_id=1)
+@@ -257,15 +258,16 @@
+         outbox=types.ModuleType('v173_runtime.outbox_service');outbox.cancel_or_delete=Mock();outbox.finalize_tracked_message=Mock()
+         scope={'__package__':'v173_runtime','passenger_order_for':lambda *a:order,'show_main_menu':Mock(),
+                'User':object,'OutboxMessage':object,'vk':Mock(),'kb':Mock(),'re':re,
+-               'passenger_cancel_request':Mock(),'set_state':Mock(),'States':NS(P_IN_RIDE='ride')}
++               'passenger_cancel_request':Mock(),'passenger_cancel':Mock(),'set_state':Mock(),'States':NS(P_IN_RIDE='ride')}
+         with relative_modules(outbox_service=outbox):
+             load('bot/handlers.py','passenger_departure_response',scope)(session,user,cancel,7)
+         return order,session,outbox,scope
+ 
+     def test_yes_removes_only_question_no_ack_and_confirms(self):
+         order,session,outbox,scope=self.response()
+-        outbox.cancel_or_delete.assert_called_once_with(session,99)
+-        outbox.finalize_tracked_message.assert_not_called()
++        outbox.cancel_or_delete.assert_not_called()
++        self.assertEqual(outbox.finalize_tracked_message.call_args.args[2], 'Машинка в пути')
++        self.assertTrue(outbox.finalize_tracked_message.call_args.kwargs['defer_edit'])
+         scope['vk'].send_message.assert_called_once_with(11,'Клиент ожидает вас на месте')
+         self.assertTrue(order.actuality_confirmed)
+         self.assertIsNone(order.departure_prompt_outbox_id)
+@@ -273,8 +275,10 @@
+ 
+     def test_no_removes_buttons_then_uses_existing_cancel_flow(self):
+         order,session,outbox,scope=self.response(cancel=True)
+-        outbox.cancel_or_delete.assert_called_once_with(session,99)
+-        scope['passenger_cancel_request'].assert_called_once_with(session,NS(vk_id=22),7)
++        outbox.cancel_or_delete.assert_not_called()
++        self.assertEqual(outbox.finalize_tracked_message.call_args.args[2], '❌ Заявка отменена.')
++        scope['passenger_cancel'].assert_called_once_with(session,NS(vk_id=22),7)
++        scope['passenger_cancel_request'].assert_not_called()
+         scope['vk'].send_message.assert_not_called()
+         self.assertIsNone(order.departure_prompt_outbox_id)
+ 
+@@ -299,7 +303,7 @@
+         models={name:type(name,(),{}) for name in ('User','OutboxMessage')}
+         session=Mock();session.get.side_effect=lambda model,id:NS(text=prompt) if model is models['OutboxMessage'] else NS(vk_id=11+id)
+         outbox=types.ModuleType('v173_runtime.outbox_service');outbox.cancel_or_delete=Mock();outbox.finalize_tracked_message=Mock()
+-        scope={'__package__':'v173_runtime',**models,'dt':dt,'timers':Mock(),'waiting_service':Mock(),
++        scope={'__package__':'v173_runtime',**models,'dt':dt,'re':re,'timers':Mock(),'waiting_service':Mock(),
+                'get_int':lambda *a:free,'get_float':lambda *a:rate,'_is_dispatcher_order':lambda o:False,
+                'vk':Mock(),'kb':Mock(),'set_state':Mock(),'States':NS(P_ARRIVED='arrived')}
+         with relative_modules(outbox_service=outbox):
+@@ -326,7 +330,7 @@
+ 
+     def test_arrival_preserves_legacy_driver_card(self):
+         _,session,outbox,_=self.arrival(prompt='Имя\nАвто: Машина\nЖдете?')
+-        outbox.finalize_tracked_message.assert_called_once_with(session,99,'')
++        outbox.finalize_tracked_message.assert_called_once_with(session,99,'Имя\nАвто: Машина',replace_text=True,defer_edit=True)
+         outbox.cancel_or_delete.assert_not_called()
+ 
+     def test_pending_retired_refusal_notice_is_suppressed(self):
+--- a/tests/test_requirements_v21_five_fixes.py
++++ b/tests/test_requirements_v21_five_fixes.py
+@@ -27,7 +27,9 @@
+         source = ORDER_SERVICE.read_text("utf-8")
+         fn = source.split("def start_free_waiting", 1)[1].split("def _extras_summary", 1)[0]
+         self.assertIn("finalize_tracked_message", fn)
+-        self.assertIn('order.departure_prompt_outbox_id,\n                "",', fn)
++        self.assertIn('final_text,', fn)
++        self.assertIn('replace_text=True', fn)
++        self.assertIn('defer_edit=True', fn)
+         self.assertIn('(prompt.text or "").strip() == "Ждете?"', fn)
+         self.assertIn("cancel_or_delete", fn)
+         card = source.split("def driver_card_text", 1)[1].split("def driver_chat_reason_label", 1)[0]
+--- a/tests/test_requirements_v34_interactive_cleanup.py
++++ b/tests/test_requirements_v34_interactive_cleanup.py
+@@ -33,7 +33,8 @@
+         self.assertIn('return passenger_departure_response(', handlers)
+         self.assertIn('cancel=True, order_id=payload.get("order_id")', handlers)
+         self.assertNotIn('"✅ Вы ответили: Да, жду."', handlers)
+-        self.assertIn("outbox_service.cancel_or_delete(session, prompt_id)", handlers)
++        self.assertIn('session, prompt_id, final_text, replace_text=True, defer_edit=True', handlers)
++        self.assertIn("replacement_keyboard='{\"buttons\":[],\"inline\":true}'", handlers)
+ 
+     def test_queue_actuality_card_is_tracked(self):
+         queue = self.src("bot/passenger_queue.py")
+--- a/tests/test_requirements_v66_photo_forwarding.py
++++ b/tests/test_requirements_v66_photo_forwarding.py
+@@ -67,7 +67,7 @@
+         for root in ROOTS:
+             src = _read(root, "bot/handlers.py")
+             self.assertIn(
+-                "if active and active.driver_id and (text or attachments):", src, root
++                "if active and (active.driver_id or active.parallel_driver_id) and (text or attachments):", src, root
+             )
+             self.assertIn("if active:\n        if text or attachments:", src, root)
+ 
+--- a/tests/test_requirements_v84_reported_parallel_regressions.py
++++ b/tests/test_requirements_v84_reported_parallel_regressions.py
+@@ -249,7 +249,7 @@
+             route_text="Пашия — Горнозаводск",
+             address_to="Горнозаводск",
+             passenger_id=100,
+-            dispatcher_id=None,
++            dispatcher_id=None, customer_price=None, voice_attachment=None,
+         )
+         driver = SimpleNamespace(id=9, vk_id=9009, driver_gender="female")
+         scheduled = []
+@@ -267,13 +267,15 @@
+             "States": SimpleNamespace(D_IN_RIDE="driver_in_ride"),
+             "set_state": lambda *args: states.append(args),
+             "order_service": SimpleNamespace(
+-                schedule_prearrival_notice=lambda *args: scheduled.append(args)
++                schedule_prearrival_notice=lambda *args: scheduled.append(args),
++                order_text=lambda o: o.route_text or o.address_to,
+             ),
+             "_driver_ride_kb": lambda session, active: (
+                 "female-arrived-keyboard" if driver.driver_gender == "female" else "male"
+             ),
+             "vk": SimpleNamespace(
+-                send_message=lambda *args, **kwargs: sent.append((args, kwargs))
++                send_message=lambda *args, **kwargs: sent.append((args, kwargs)),
++                prepare_voice_attachment=lambda *args: None,
+             ),
+             "log": SimpleNamespace(error=lambda *args, **kwargs: None),
+         }
+--- a/tests/test_requirements_v95_direct_driver_selection.py
++++ b/tests/test_requirements_v95_direct_driver_selection.py
+@@ -75,9 +75,9 @@
+         self.assertIn("requested_driver_id", direct_offer)
+         self.assertNotIn("next_waiting_driver", direct_offer)
+         decline = function_source(self.handlers, "driver_decline")
+-        direct_branch = decline.split("if order.requested_driver_id:", 1)[1].split("# --- «Бронь»", 1)[0]
++        direct_branch = decline.split("if order.requested_driver_id:", 1)[1].split("# Explicit handoff", 1)[0]
+         self.assertIn('order.status = "cancelled"', direct_branch)
+-        self.assertIn("Она не передавалась другим водителям", direct_branch)
++        self.assertIn("Данный водитель не может взять заказ. Попробуйте выбрать другого водителя.", direct_branch)
+         self.assertNotIn("offer_to_next_driver", direct_branch)
+ 
+     def test_06_driver_departure_cancels_direct_instead_of_requeueing(self):
+@@ -97,7 +97,7 @@
+ 
+     def test_08_eta_still_asks_if_passenger_waits(self):
+         eta = function_source(self.handlers, "_apply_eta")
+-        self.assertIn('question = "Ждете?"', eta)
++        self.assertIn('question = "Ждёте машинку?"', eta)
+         self.assertIn("kb.passenger_departure_keyboard(order.id)", eta)
+         self.assertNotIn("requested_driver_id", eta)
+ 
+--- /dev/null
++++ b/CHANGELOG_V181_FIXES_RU.md
+@@ -0,0 +1,41 @@
++# V181 — согласованные исправления VK-бота
++
++Дата: 28 октября 2026. Основа: предоставленный архив V180-dev. Это исправление исходников, а не новая сборка Android и не подтверждение готовности всей V180-dev к эксплуатации.
++
++## Что изменено
++
++1. При переходе к закреплённой параллельной заявке выводится «💰 Цена клиента: … ₽», если customer_price задана. Используется публичный номер заявки. В переходную карточку добавляется голосовое вложение, если оно есть.
++2. Чат умеет определять водителя через driver_id ИЛИ parallel_driver_id. Ответ водителя привязан к конкретной заявке, а не автоматически к пассажиру предыдущей поездки. Добавлена кнопка «Связаться с пассажиром» в карточку закреплённой параллельной заявки. Проверяется участие пользователя и активность заявки; входящие сообщения не сбивают ввод суммы, ETA и подтверждение актуальности.
++3. При обработке входящего сообщения учитываются ГС во вложенных fwd_messages — в том числе пересланные диспетчером голосовые. Исходная голосовая метаинформация больше не заменяется результатом загрузки для одного получателя: для следующего водителя/чата вложение готовится заново. Для старых приватных doc-ссылок выполняется попытка получить метаданные и повторно загрузить голосовое. Временный файл запасной загрузки удаляется. Передача и доставка через живой VK требуют приёмки.
++4. После указания ETA пассажир получает ОДНУ отслеживаемую карточку с водителем, авто/номером, временем подачи и вопросом «Ждёте машинку?». Кнопки: «✅ Да, жду» / «❌ Нет, отменяю заявку». «Да» сохраняет данные карточки, убирает вопрос и кнопки, добавляет «Машинка в пути». «Нет» убирает вопрос/кнопки и запускает существующую отмену без второго вопроса подтверждения. Действующие ограничения отмены после посадки и правила ложного вызова не отключены. Редактирование выполняется через устойчивую очередь outbox. При приезде водителя из неотвеченной карточки также убирается вопрос, данные авто сохраняются.
++5. Пассажирский итог поездки использует order.number (public_number с прежним fallback), а не постоянный order.id. Сброс публичной нумерации не меняется, первичные ключи не сбрасываются.
++6. При отказе персонально выбранного водителя пассажир получает: «Данный водитель не может взять заказ. Попробуйте выбрать другого водителя». Кнопка повторного выбора сохраняется. Персональные заявки по-прежнему не передаются другим водителям автоматически.
++7. В подтверждении ожидания параллельной заявки «Дожду» заменено на «✅ Да, жду», «Не жду» — на «❌ Нет, отменяю заявку». В уведомлении водителю используется та же формулировка «Да, жду».
++8. В меню причин отказа обычной заявки добавлено «📣 Отдать в водительскую»; прежние причины сохранены. При выборе:
++   - заявка не предлагается следующему FIFO-водителю, а публикуется в настроенном общем чате с @all и кнопкой «Взять заявку»;
++   - цена и голосовое вложение передаются в чат, если они есть;
++   - водитель остаётся на линии и первым в очереди;
++   - пассажиру: «✅ Активно ищем водителя в чате, ожидайте»;
++   - если публикацию не удалось поставить в очередь, предложение водителю восстанавливается, ложное подтверждение пассажиру не отправляется;
++   - для персонально выбранного водителя действует пункт 6: специальная передача в чат в его меню не предлагается, чтобы не нарушать выбор пассажира.
++
++## Изменённые рабочие файлы
++
++- bot/handlers.py
++- bot/keyboards.py
++- bot/messaging.py
++- bot/order_service.py
++- bot/parallel_orders.py
++- bot/vk_client.py
++
++Схема базы, правила тарифов, таймауты и исходники Android не изменены. Новых миграций относительно исходного V180-dev нет. При обновлении с V179 всё равно требуется имеющаяся в V180 миграция 0053 — это не новая миграция данного исправления.
++
++## Проверка и установка
++
++Новые тесты: tests/integration_v181_fixes.py, tests/test_v181_fixes_isolated.py. Они проверяют ORM/состояния на SQLite и полные импортированные обработчики с запрещённой сетью; VK, FCM и таймеры подменяются контролируемыми заглушками. Это не испытания блокировок PostgreSQL или доставки сообщений через живой VK.
++
++Результаты фактических прогонов — в QA_V181_FIXES_RU.md. Старые проверки сообщений обновлены только в тех местах, где новые согласованные требования заменили прежнее поведение (одна карточка вместо двух, новые подписи, публичный номер и параллельный собеседник). Старые несвязанные ошибки тестов не скрывались и не исправлялись.
++
++Перед заменой на сервере: резервная копия БД и исходников; проверить на стенде восемь сценариев; настроить driver_fallback_chat_peer_id и разрешения бота в этой беседе. Для @all нужны соответствующие возможности/права VK в целевом чате. Затем пересобрать и перезапустить bot и admin из одного набора исходников. Автоматический деплой и миграции здесь не выполнялись.
++
++В архиве сохранён исходный APK версии 1.6: он НЕ пересобран и не соответствует новым исходникам Android 1.8.0-dev. Исправления этого выпуска находятся на серверной стороне.
+--- /dev/null
++++ b/QA_V181_FIXES_RU.md
+@@ -0,0 +1,59 @@
++# Проверки V181 — исправления восьми согласованных пунктов
++
++## Окружение
++
++- Python 3.11.18, изолированное окружение, зависимости закреплены requirements.txt.
++- SQLite для ORM/состояний. Никаких вызовов рабочего PostgreSQL, VK, FCM или изменений на сервере.
++- В проверках полного графа импортов HTTP-вызовы жёстко запрещены; Long Poll, отправка сообщений, FCM и запуск таймеров заменены заглушками.
++
++## Результаты
++
++- Синтаксический разбор: все 262 Python-файла без ошибок.
++- Исходный архив без изменений: 849 тестов, 844 успешных, 4 failures + 1 error.
++- Архив с исправлениями: 850 тестов, 845 успешных, 4 failures + 1 error. Все пять проблем совпадают с исходным архивом; новых непройденных проверок нет.
++- Новый изолированный сценарный набор: 22 теста (включая 7 тестов полных импортированных обработчиков). Все проходят. Он запускается отдельным процессом из общей регрессии, поскольку старые тесты подменяют common.models в своём процессе.
++- Проверки V180 ORM/API и V179 ORM также выполнялись с установленными зависимостями, не пропускались из-за отсутствующего SQLAlchemy.
++
++## Новое покрытие
++
++- Переход к параллельной заявке: цена 350 / 0 / отсутствует, сохранение источника ГС, назначение driver_id, удаление parallel_driver_id.
++- Чат в обе стороны по закреплённой параллельной заявке при наличии другой текущей поездки; явный вход по новой кнопке; запрет чужой/закрытой заявки и устаревшей привязки; сохранение состояния ввода итоговой суммы.
++- Ответ диспетчера голосовым водителю параллельной заявки; создание реальной диспетчерской голосовой заявки полными обработчиками и передача следующему водителю с сохранённым исходным вложением.
++- Вложенный пересланный ГС, подготовка для разных получателей, обновление старой приватной doc-ссылки.
++- Единая карточка водитель/авто/госномер/ETA/вопрос. «Да» обновляет её и добавляет «Машинка в пути» без повторного уведомления водителя; «Нет» отменяет без второй формы подтверждения. При прибытии карточка сохраняется без старого вопроса.
++- Итог с внутренним ID 10500 использует публичный номер 3000. Проверено также завершение текущей поездки и полный переход к следующей с ценой клиента.
++- Новые подписи кнопок и сохранение всех прежних причин отказа.
++- Передача в водительскую: @all, цена, первый в очереди, точный текст пассажиру, отсутствие FIFO-переназначения, защита от повторного клика и восстановление предложения при недоступном чате.
++- Персональная заявка: точный текст отказа и отсутствие утечки в общий чат.
++
++## Существовавшие до исправлений проблемы регрессии
++
++Не исправлялись и не скрывались:
++
++1. test_requirements_v163_direct_selection_dedup — test_message_identity_wins_over_unstable_event_id: код использует event_id раньше идентичности сообщения.
++2. Тот же файл — test_user_state_transitions_are_database_serialized: тест ищет старый комментарий/row lock внутри handler; код уже использует advisory lock перед handler.
++3. Тот же файл — test_duplicate_order_creation_is_stopped_before_draft_processing: расположение duplicate guard относительно чтения draft не соответствует контракту теста.
++4. Тот же файл — test_direct_offer_failure_logs_exact_reason: нет ожидаемого rejection_reasons в логировании.
++5. test_requirements_v172_remove_calculator — test_calculation_code_and_defaults_removed: остался файл bot/price_calculator.py.
++
++Это контрактные/source-проверки; их наличие не является само по себе доказательством каждого соответствующего runtime-дефекта. Изменённые старые тесты обновлены только под новые согласованные требования.
++
++## Что обязательно проверить на стенде
++
++1. Реальный VK: прямое и пересланное голосовое диспетчера проигрывается у первого и следующего водителя; ГС доступно после принятия и при переходе к параллельной.
++2. Переписка текущего и параллельного пассажира не смешивается; кнопка параллельного чата отвечает нужному пассажиру; после перехода остаётся правильная привязка.
++3. Пассажир видит одну карточку с авто/водителем/ETA. После «Да, жду» из неё уходят вопрос/кнопки, появляется «Машинка в пути». После «Нет» заявка отменяется по действующим правилам.
++4. Новый вариант отказа сохраняет водителя первым на его линии; в настроенную беседу приходит @all; пассажир получает согласованный текст. У бота есть права на беседу/упоминания.
++5. Публичная нумерация после сброса совпадает в карточке и итоговом сообщении.
++6. Конкурентные ответы/отмена/приём заявок в PostgreSQL, восстановление после рестарта и живой FCM. SQLite и заглушки этого не доказывают.
++
++Тесты не означают готовности всей исходной V180-dev к боевому использованию: карты, фоновая навигация и новый Android APK не завершены этим серверным исправлением. APK в архиве остаётся исходной версией 1.6.
++
++## Команды
++
++```bash
++python tests/integration_v181_fixes.py -v
++python -m unittest discover -s tests -v
++```
++
++Вторая команда ожидаемо возвращает ненулевой код из-за пяти перечисленных старых проверок. Новые проверки должны завершиться OK.
+--- /dev/null
++++ b/tests/integration_v181_fixes.py
+@@ -0,0 +1,419 @@
++"""V181: real SQLite ORM + original functions; VK/FCM/timers are mocked.
++
++This is NOT a live VK delivery or PostgreSQL concurrency test.
++"""
++import sys
++from pathlib import Path
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++import datetime as dt
++import json
++import math
++import re
++import threading
++import types
++import unittest
++from types import SimpleNamespace as NS
++from unittest.mock import Mock, patch
++from sqlalchemy import create_engine, func
++from sqlalchemy.orm import sessionmaker
++from common import models as m, time_utils
++from bot import keyboards as kb
++from bot.states_service import States, get_state, get_data, set_state, reset
++from test_requirements_v173_requested_changes import load, relative_modules
++
++
++class FixesV181(unittest.TestCase):
++    def setUp(self):
++        self.engine = create_engine('sqlite:///:memory:')
++        m.Base.metadata.create_all(self.engine)
++        self.s = sessionmaker(self.engine, expire_on_commit=False, autoflush=False)()
++        self.driver = m.User(vk_id=101, role='driver', granted_roles='driver,passenger',
++                             full_name='Водитель', current_line='Горнозаводск', is_on_line=True,
++                             driver_status='online', car_model='Москвич', car_color='Серый', car_number='А893АА')
++        self.passenger = m.User(vk_id=201, full_name='Клиент')
++        self.previous = m.User(vk_id=202, full_name='Предыдущий клиент')
++        self.dispatcher = m.User(vk_id=301, role='dispatcher', granted_roles='dispatcher,passenger')
++        self.other = m.User(vk_id=102, role='driver', granted_roles='driver,passenger')
++        self.city = m.City(name='Горнозаводск', is_active=True)
++        self.s.add_all([self.driver, self.passenger, self.previous, self.dispatcher, self.other, self.city]); self.s.flush()
++        self.s.add_all([m.DriverQueue(driver_id=self.driver.id, city_id=self.city.id, position=1, status='waiting'),
++                       m.DriverQueue(driver_id=self.other.id, city_id=self.city.id, position=2, status='waiting')]); self.s.flush()
++        self.vk = Mock()
++        self.vk.send_message.return_value = True
++        self.vk.send_tracked_message.side_effect = self.tracked
++        self.vk.prepare_voice_attachment.side_effect = lambda peer, source: f'doc-77_{peer}' if source else None
++        self.vk.reupload_attachments.return_value = ['doc-77_5']
++        self.timers = Mock()
++        self.settings = {'driver_fallback_chat_peer_id': 2000000001, 'driver_accept_timeout': 60}
++        self.outbox = types.ModuleType('v173_runtime.outbox_service')
++        self.outbox_scope = self.scope()
++        for name in ('_stored_vk_marker_id', '_stored_vk_message_id', '_stored_vk_cmid', 'has_usable_vk_id', 'finalize_tracked_message'):
++            load('bot/outbox_service.py', name, self.outbox_scope)
++        self.outbox.finalize_tracked_message = self.outbox_scope['finalize_tracked_message']
++        self.outbox.cancel_or_delete = Mock(return_value=True)
++        self.q = self.scope()
++        self.q.update(_sync_away_notice=Mock(), _notify_fronts=Mock())
++        for name in ('_min_position', 'release_offer', 'mark_offered', 'move_to_front'):
++            load('bot/queue_service.py', name, self.q)
++        self.queue = NS(**{name:self.q[name] for name in ('release_offer', 'mark_offered', 'move_to_front')})
++        self.queue.set_away = Mock(); self.queue.leave_queue = Mock()
++        self.os = self.scope()
++        self.os["DELIVERY_TYPES"] = ("delivery", "partner_delivery")
++        self.os.update(queue_service=self.queue, _set_state=set_state,
++                       CHAT_UNCLAIMED_TIMEOUT_SECONDS=2700,
++                       send_fallback_chat_tracked_notice=lambda session,text,**kw:self.vk.send_tracked_message(2000000001,text,**kw))
++        for name in ('order_text', 'is_delivery_type', '_passenger_review_word', 'driver_rating_text',
++                     'departure_driver_card_text', 'normalize_driver_chat_peer_id', '_declined_ids', '_add_declined',
++                     '_declined_reasons', 'add_decline', '_set_current_offer', '_current_offer', 'clear_current_offer',
++                     'finalize_offer_message', 'publish_special_decline_to_requests_chat', 'start_free_waiting'):
++            load('bot/order_service.py', name, self.os)
++        self.service = NS(**{k:v for k,v in self.os.items() if callable(v)})
++        self.service.multi_car_label = Mock(return_value=None)
++        self.service.schedule_prearrival_notice = Mock()
++        self.service.offer_to_next_driver = Mock()
++        self.service._accept_timeout = Mock()
++        self.msg = self.scope()
++        for name in ('_counterpart', 'relay'):
++            load('bot/messaging.py', name, self.msg)
++        self.h = self.scope()
++        self.h.update(order_service=self.service, queue_service=self.queue, relay=self.msg['relay'],
++                      show_main_menu=Mock(), _driver_ride_kb=Mock(return_value='ride'),
++                      _restore_active_menu_after_stale_offer=Mock(return_value=False),
++                      can_switch_role=lambda user:False, _passenger_labels=lambda session:{},
++                      passenger_queue=Mock(), customer_price_service=NS(has_price=lambda o:o.customer_price is not None),
++                      passenger_cancel=Mock(), passenger_cancel_request=Mock(),
++                      delivery_service=NS(is_delivery=lambda o:False,is_partner_delivery=lambda o:False),
++                      _is_dispatcher_order=lambda o: bool(o.dispatcher_id))
++        for name in ('active_order_for','passenger_order_for','driver_chat_order_for','enter_chat','exit_chat','chat_forward',
++                     'dispatcher_reply_start','dispatcher_reply_send','passenger_departure_response','_apply_eta','driver_decline'):
++            load('bot/handlers.py',name,self.h)
++
++    def scope(self):
++        result = {k:getattr(m,k) for k in ('User','Order','DriverQueue','City','OutboxMessage','Message','DispatcherCommission')}
++        result.update(__package__='v173_runtime', re=re,json=json,math=math,dt=dt,func=func,
++                      vk=self.vk,timers=self.timers,kb=kb,time_utils=time_utils,States=States,
++                      get_state=get_state,get_data=get_data,set_state=set_state,reset=reset,
++                      ROLE_DISPATCHER='dispatcher',log=Mock(), audit=Mock(),
++                      get_int=lambda session,key,default=0:self.settings.get(key,default),
++                      get_float=lambda session,key,default=0:default,waiting_service=Mock())
++        return result
++
++    def tearDown(self):
++        self.s.close();self.engine.dispose()
++
++    def tracked(self, peer, text, **kw):
++        row=m.OutboxMessage(peer_id=peer,text=text,keyboard=kw.get('keyboard'),attachment=kw.get('attachment'),
++                            status='pending',random_id=self.s.query(m.OutboxMessage).count()+1)
++        self.s.add(row);self.s.flush();return row.id
++
++    def order(self, **kw):
++        values=dict(passenger_id=self.passenger.id,address_from='Новая 8',address_to='Ленина 2',
++                    route_text='Новая 8 — Ленина 2',status='assigned',driver_id=self.driver.id,public_number=3000)
++        values.update(kw);o=m.Order(**values);self.s.add(o);self.s.flush();return o
++
++    def current_and_parallel(self):
++        current=self.order(passenger_id=self.previous.id,status='in_progress',public_number=2999)
++        parallel=self.order(driver_id=None,parallel_driver_id=self.driver.id,status='parallel_assigned',customer_price=350)
++        return current,parallel
++
++    def test_parallel_chat_both_directions_use_reserved_order_not_current(self):
++        current,parallel=self.current_and_parallel()
++        self.assertTrue(self.msg['relay'](self.s,parallel,self.passenger,'Встречайте',[]))
++        self.assertEqual(get_state(self.s,101).state,States.D_CHAT)
++        self.assertEqual(get_data(self.s,101)['order_id'],parallel.id)
++        self.h['chat_forward'](self.s,self.driver,'Уже еду',[],True)
++        sent=self.vk.send_message.call_args_list
++        self.assertTrue(any(c.kwargs.get('peer_id')==201 and 'Уже еду' in c.kwargs.get('text','') for c in sent))
++        self.assertFalse(any(c.kwargs.get('peer_id')==202 for c in sent))
++        self.s.flush();self.assertEqual({x.order_id for x in self.s.query(m.Message)}, {parallel.id})
++
++    def test_chat_rejects_outsider_closed_order_and_stale_driver_binding(self):
++        current,parallel=self.current_and_parallel()
++        self.assertFalse(self.msg['relay'](self.s,parallel,self.other,'Чужой',[]))
++        parallel.status='completed';self.s.flush()
++        self.assertFalse(self.msg['relay'](self.s,parallel,self.driver,'Устарело',[]))
++        self.assertIsNone(self.h['driver_chat_order_for'](self.s,self.driver,parallel.id))
++        self.assertIsNone(self.h['driver_chat_order_for'](self.s,self.other,current.id))
++        self.assertIsNone(self.h['driver_chat_order_for'](self.s,self.driver,'bad'))
++
++    def test_parallel_chat_does_not_overwrite_fare_input(self):
++        _,parallel=self.current_and_parallel()
++        set_state(self.s,101,States.D_FINISH_PRICE,{'order_id':1})
++        self.msg['relay'](self.s,parallel,self.passenger,'Добрый день',[])
++        self.assertEqual(get_state(self.s,101).state,States.D_FINISH_PRICE)
++
++    def test_dispatcher_voice_reply_reaches_parallel_driver(self):
++        _,parallel=self.current_and_parallel();parallel.passenger_id=self.dispatcher.id;parallel.dispatcher_id=self.dispatcher.id
++        self.s.flush()
++        self.h['dispatcher_reply_start'](self.s,self.dispatcher,parallel.id)
++        voice=[{'type':'audio_message','audio_message':{'owner_id':301,'id':5,'link_ogg':'https://vk.example/voice.ogg'}}]
++        self.h['dispatcher_reply_send'](self.s,self.dispatcher,'',voice)
++        self.vk.reupload_attachments.assert_called_once_with(101,voice)
++        self.assertEqual(self.vk.send_message.call_args_list[-2].kwargs['attachment'],'doc-77_5')
++        self.assertEqual(self.vk.send_message.call_args_list[-2].kwargs['peer_id'],101)
++
++    def test_eta_is_one_card_yes_edits_it_and_is_idempotent(self):
++        o=self.order()
++        self.h['_apply_eta'](self.s,self.driver,o,5)
++        self.vk.send_tracked_message.assert_called_once()
++        row=self.s.get(m.OutboxMessage,o.departure_prompt_outbox_id)
++        for text in ('Водитель','Москвич','А893АА','через 5 мин.','Ждёте машинку?'):self.assertIn(text,row.text)
++        self.assertFalse(any(c.args and c.args[0]==201 for c in self.vk.send_message.call_args_list))
++        with relative_modules(outbox_service=self.outbox):
++            self.h['passenger_departure_response'](self.s,self.passenger,False,o.id)
++            self.h['passenger_departure_response'](self.s,self.passenger,False,o.id)
++        self.assertIn('Машинка в пути',row.text);self.assertNotIn('Ждёте',row.text)
++        self.assertIn('А893АА',row.text);self.assertEqual(json.loads(row.keyboard)['buttons'],[])
++        self.assertTrue(o.actuality_confirmed);self.assertIsNone(o.departure_prompt_outbox_id)
++        self.assertEqual(sum(c.args==(101,'Клиент ожидает вас на месте') for c in self.vk.send_message.call_args_list),1)
++
++    def test_no_cancels_directly_and_clears_exact_card(self):
++        o=self.order();o.departure_prompt_outbox_id=self.tracked(201,'Водитель\nАвто А893АА\nЖдёте машинку?',keyboard=kb.passenger_departure_keyboard(o.id))
++        row=self.s.get(m.OutboxMessage,o.departure_prompt_outbox_id)
++        with relative_modules(outbox_service=self.outbox):self.h['passenger_departure_response'](self.s,self.passenger,True,o.id)
++        self.h['passenger_cancel'].assert_called_once_with(self.s,self.passenger,o.id)
++        self.h['passenger_cancel_request'].assert_not_called()
++        self.assertIn('Заявка отменена',row.text);self.assertNotIn('Ждёте',row.text)
++        self.assertEqual(json.loads(row.keyboard)['buttons'],[])
++
++    def test_arrival_strips_unanswered_question_but_keeps_car(self):
++        o=self.order();o.departure_prompt_outbox_id=self.tracked(201,'Водитель\nАвто А893АА\nЖдёте машинку?',keyboard=kb.passenger_departure_keyboard(o.id))
++        row=self.s.get(m.OutboxMessage,o.departure_prompt_outbox_id)
++        self.os['_is_dispatcher_order']=lambda o:False
++        with relative_modules(outbox_service=self.outbox):self.os['start_free_waiting'](self.s,o)
++        self.assertIn('А893АА',row.text);self.assertNotIn('Ждёте',row.text)
++        self.assertEqual(json.loads(row.keyboard)['buttons'],[])
++
++    def test_promotion_contains_customer_price_and_preserves_voice_source(self):
++        for amount in (350,0,None):
++            with self.subTest(amount=amount):
++                self.s.query(m.Order).delete();self.s.flush()
++                _,o=self.current_and_parallel();o.customer_price=amount
++                o.voice_attachment=json.dumps({'vk_voice':{'link_ogg':'https://vk.example/source.ogg'}})
++                source=o.voice_attachment
++                self.s.query(m.Order).filter(m.Order.id!=o.id).update({'status':'completed'});self.s.flush()
++                p=self.scope();p.update(ACTIVE=('assigned','arrived','in_progress'))
++                handlers=types.ModuleType('v173_runtime.handlers');handlers._driver_ride_kb=self.h['_driver_ride_kb']
++                with relative_modules(order_service=self.service,handlers=handlers):load('bot/parallel_orders.py','promote_after_current',p)(self.s,self.driver)
++                text=self.vk.send_message.call_args_list[-2].args[1]
++                self.assertIn('#3000',text)
++                self.assertEqual('Цена клиента:' in text,amount is not None)
++                if amount is not None:self.assertIn(f'{amount} ₽',text)
++                self.assertEqual(o.voice_attachment,source);self.assertEqual(o.driver_id,self.driver.id)
++                self.assertIsNone(o.parallel_driver_id)
++
++    def handoff(self, no_chat=False, personal=False):
++        o=self.order(status='searching',driver_id=None,offered_driver_id=self.driver.id,
++                     requested_driver_id=self.driver.id if personal else None,customer_price=350)
++        self.s.query(m.DriverQueue).filter_by(driver_id=self.driver.id).one().status='offered';self.s.flush()
++        if no_chat:self.settings['driver_fallback_chat_peer_id']=0
++        with relative_modules(outbox_service=self.outbox):self.h['driver_decline'](self.s,self.driver,o.id,'to_driver_chat')
++        return o
++
++    def test_handoff_mentions_all_keeps_first_and_has_exact_passenger_notice(self):
++        o=self.handoff()
++        self.assertEqual(o.status,'chat_search');self.assertIsNone(o.offered_driver_id)
++        card=self.s.get(m.OutboxMessage,o.chat_notice_outbox_id)
++        self.assertTrue(card.text.startswith('@all\n'));self.assertIn('350 ₽',card.text)
++        self.assertIn(self.driver.id,json.loads(o.declined_driver_ids))
++        rows=self.s.query(m.DriverQueue).order_by(m.DriverQueue.position).all()
++        self.assertEqual(rows[0].driver_id,self.driver.id);self.assertEqual(rows[0].status,'waiting')
++        self.assertTrue(self.driver.is_on_line)
++        self.assertTrue(any(c.args[:2]==(201,'✅ Активно ищем водителя в чате, ожидайте') for c in self.vk.send_message.call_args_list))
++        self.service.offer_to_next_driver.assert_not_called()
++        before=self.vk.send_tracked_message.call_count
++        self.h['driver_decline'](self.s,self.driver,o.id,'to_driver_chat')
++        self.assertEqual(self.vk.send_tracked_message.call_count,before)
++
++    def test_failed_handoff_restores_offer_not_false_success(self):
++        o=self.handoff(no_chat=True)
++        self.assertEqual(o.status,'searching');self.assertEqual(o.offered_driver_id,self.driver.id)
++        self.assertFalse(o.declined_driver_ids)
++        self.assertEqual(self.s.query(m.DriverQueue).filter_by(driver_id=self.driver.id).one().status,'offered')
++        self.assertFalse(any(c.args[:2]==(201,'✅ Активно ищем водителя в чате, ожидайте') for c in self.vk.send_message.call_args_list))
++
++    def test_personal_refusal_gives_choose_another_notice_and_never_leaks(self):
++        o=self.handoff(personal=True)
++        self.assertEqual(o.status,'cancelled');self.assertIsNone(o.chat_notice_outbox_id)
++        self.assertTrue(any(c.args[:2]==(201,'Данный водитель не может взять заказ. Попробуйте выбрать другого водителя.') for c in self.vk.send_message.call_args_list))
++
++    def test_buttons_preserve_old_reasons_and_use_yes_wait(self):
++        data=json.loads(kb.decline_reasons_keyboard(17,True))
++        payloads=[json.loads(b['action']['payload']) for row in data['buttons'] for b in row]
++        self.assertEqual({p.get('cat') for p in payloads if p['cmd']=='decline_reason'},
++                         {'far','delivery','booking','away','need_address','spam','dislike','low_price','to_driver_chat'})
++        self.assertNotIn('to_driver_chat',kb.decline_reasons_keyboard(17,True,allow_chat_handoff=False))
++        labels=[b['action']['label'] for row in json.loads(kb.parallel_actuality_keyboard(17))['buttons'] for b in row]
++        self.assertEqual(labels,['✅ Да, жду','❌ Нет, отменяю заявку'])
++
++    def test_final_summary_uses_public_number_not_internal_id(self):
++        o=self.order(id=10500,public_number=3000,status='in_progress')
++        h=self.h.copy();h.update(_parse_price=lambda text:350,_price_in_range=lambda p:True,
++            waiting_service=NS(finalize=lambda *a:(0,0)),booking_service=Mock(),night_tariff=Mock(),
++            _leave_temporary_chat_line=Mock(),_ask_driver_rate_passenger=Mock(),lines=Mock(),
++            bm=NS(render=lambda *a,**kw:('Оцените поездку',None)))
++        parallel=types.ModuleType('v173_runtime.parallel_orders');parallel.release_route_offers_for_trip=Mock();parallel.has_pending=lambda *a:False
++        expiry=types.ModuleType('v173_runtime.rating_expiry_service');expiry.schedule_expiry=Mock()
++        with relative_modules(parallel_orders=parallel,rating_expiry_service=expiry):load('bot/handlers.py','driver_complete_ride',h)(self.s,self.driver,'350')
++        texts=[c.args[1] for c in self.vk.send_message.call_args_list if len(c.args)>1]
++        summary=next(t for t in texts if t.startswith('🧾 Итог'))
++        self.assertIn('#3000',summary);self.assertNotIn('10500',summary)
++
++
++class VoiceSources(unittest.TestCase):
++    def client(self):
++        scope={'json':json,'re':re,'log':Mock(),'config':NS(VK_GROUP_ID=77)}
++        cls=load('bot/vk_client.py','VKClient',scope);c=object.__new__(cls)
++        c._api_lock=threading.RLock();c.api=Mock();c._reupload_voice=Mock(side_effect=lambda peer,voice:f'doc-77_{peer}')
++        return c
++
++    def test_forwarded_dispatcher_voice_is_extracted_and_reuploaded_for_each_peer(self):
++        c=self.client();voice={'owner_id':301,'id':9,'link_ogg':'https://vk.example/voice.ogg'}
++        atts=c.message_attachments({'fwd_messages':[{'attachments':[{'type':'audio_message','audio_message':voice}]}]})
++        source=c.voice_attachment_reference(atts)
++        self.assertEqual(c.prepare_voice_attachment(101,source),'doc-77_101')
++        self.assertEqual(c.prepare_voice_attachment(102,source),'doc-77_102')
++        self.assertEqual(json.loads(source)['vk_voice'],voice)
++        self.assertEqual(c._reupload_voice.call_count,2)
++
++    def test_legacy_private_voice_is_refreshed_before_forwarding(self):
++        c=self.client();voice={'owner_id':301,'id':9,'link_ogg':'https://vk.example/voice.ogg'}
++        c.api.docs.getById.return_value=[voice]
++        self.assertEqual(c.prepare_voice_attachment(101,'doc301_9_access'),'doc-77_101')
++        c.api.docs.getById.assert_called_once_with(docs='301_9_access')
++
++
++
++class ImportedFlowTests(unittest.TestCase):
++    """Import the complete bot dependency graph; hard-block all HTTP calls."""
++    scope = FixesV181.scope
++    tracked = FixesV181.tracked
++    order = FixesV181.order
++    current_and_parallel = FixesV181.current_and_parallel
++
++    @classmethod
++    def setUpClass(cls):
++        import importlib
++        cls.network_guard = patch('requests.sessions.Session.request', side_effect=AssertionError('Network disabled in tests'))
++        cls.network_guard.start()
++        cls.longpoll_guard = patch('vk_api.bot_longpoll.VkBotLongPoll')
++        cls.longpoll_guard.start()
++        try:
++            cls.handlers = importlib.import_module('bot.handlers')
++            cls.parallel = importlib.import_module('bot.parallel_orders')
++            cls.orders = importlib.import_module('bot.order_service')
++            cls.queue = importlib.import_module('bot.queue_service')
++            importlib.import_module('bot.push_service')
++            cls.settings_module = importlib.import_module('common.settings_service')
++        except Exception:
++            cls.longpoll_guard.stop();cls.network_guard.stop();raise
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.longpoll_guard.stop();cls.network_guard.stop()
++
++    def setUp(self):
++        FixesV181.setUp(self)
++        self.queue = type(self).queue
++        self.patches=[]
++        for name,module in list(sys.modules.items()):
++            if name.startswith('bot.') and isinstance(module,types.ModuleType) and hasattr(module,'vk'):
++                self.patches.append(patch.object(module,'vk',self.vk))
++        for name in ('schedule','cancel','cancel_all_for_order'):
++            self.patches.append(patch.object(sys.modules['bot.timers'],name,Mock()))
++        for name in ('_notify_fronts','_sync_away_notice'):
++            self.patches.append(patch.object(self.queue,name,Mock()))
++        self.patches.append(patch.object(sys.modules['bot.push_service'],'send',Mock()))
++        for item in self.patches:
++            item.start()
++            self.addCleanup(item.stop)
++        self.settings_module._cache.clear()
++        self.s.add(m.Setting(key='driver_fallback_chat_peer_id',value='2000000001'));self.s.flush()
++
++    def tearDown(self):
++        for item in reversed(self.patches):item.stop()
++        self.settings_module._cache.clear()
++        FixesV181.tearDown(self)
++
++    def test_actual_passenger_and_driver_handlers_relay_parallel_voice(self):
++        current,parallel=self.current_and_parallel()
++        self.handlers.handle_passenger(self.s,self.passenger,States.P_WAITING,'Сообщение',{},[])
++        self.assertEqual(get_state(self.s,101).state,States.D_CHAT)
++        self.assertEqual(get_data(self.s,101)['order_id'],parallel.id)
++        voice=[{'type':'audio_message','audio_message':{'link_ogg':'https://vk.example/voice.ogg'}}]
++        self.handlers.handle_driver(self.s,self.driver,States.D_CHAT,'',{},voice)
++        self.vk.reupload_attachments.assert_called_with(201,voice)
++        self.assertEqual(self.vk.send_message.call_args_list[-2].kwargs['peer_id'],201)
++
++    def test_actual_dispatcher_voice_creation_keeps_source_and_delivers_offer(self):
++        voice=[{'type':'audio_message','audio_message':{'owner_id':301,'id':9,'link_ogg':'https://vk.example/voice.ogg'}}]
++        source=json.dumps({'vk_voice':voice[0]['audio_message']},ensure_ascii=False)
++        self.vk.voice_attachment_reference.return_value=source
++        set_state(self.s,301,States.P_ADDR,{'draft':{'dispatcher':True}},merge=False)
++        self.handlers.handle_dispatcher(self.s,self.dispatcher,States.P_ADDR,'',{},voice)
++        order=self.s.query(m.Order).one()
++        self.assertEqual(order.dispatcher_id,self.dispatcher.id)
++        self.assertEqual(order.voice_attachment,source)
++        self.assertEqual(order.offered_driver_id,self.driver.id)
++        self.assertTrue(any(c.kwargs.get('attachment')=='doc-77_101' for c in self.vk.send_tracked_message.call_args_list))
++        # A reassignment uploads for the next recipient without losing the source.
++        self.queue.release_offer(self.s,self.driver)
++        self.orders.add_decline(self.s,order,self.driver.id,'dislike')
++        self.orders.clear_current_offer(self.s,order);self.s.flush()
++        self.other.is_on_line=True;self.other.driver_status='online';self.s.flush()
++        self.orders.offer_to_next_driver(self.s,order)
++        self.assertEqual(order.voice_attachment,source)
++        self.assertTrue(any(c.kwargs.get('attachment')=='doc-77_102' for c in self.vk.send_tracked_message.call_args_list))
++
++    def test_actual_handoff_keeps_front_and_queues_all_card(self):
++        order=self.order(status='searching',driver_id=None,offered_driver_id=self.driver.id)
++        self.s.query(m.DriverQueue).filter_by(driver_id=self.driver.id).one().status='offered';self.s.flush()
++        self.handlers.driver_decline(self.s,self.driver,order.id,'to_driver_chat')
++        self.assertEqual(order.status,'chat_search')
++        self.assertEqual(self.s.query(m.DriverQueue).order_by(m.DriverQueue.position).first().driver_id,self.driver.id)
++        self.assertTrue(self.s.get(m.OutboxMessage,order.chat_notice_outbox_id).text.startswith('@all'))
++        self.assertTrue(any(c.args[:2]==(201,'✅ Активно ищем водителя в чате, ожидайте') for c in self.vk.send_message.call_args_list))
++
++    def test_actual_eta_yes_updates_same_card(self):
++        order=self.order()
++        self.handlers._apply_eta(self.s,self.driver,order,5)
++        row=self.s.get(m.OutboxMessage,order.departure_prompt_outbox_id)
++        self.handlers.passenger_departure_response(self.s,self.passenger,False,order.id)
++        self.assertIn('Машинка в пути',row.text)
++        self.assertIn('А893АА',row.text)
++        self.assertNotIn('Ждёте',row.text)
++        self.assertEqual(json.loads(row.keyboard)['buttons'],[])
++
++    def test_actual_parallel_chat_button_binds_to_next_passenger(self):
++        current,parallel=self.current_and_parallel()
++        data=json.loads(kb.parallel_reserved_keyboard(parallel.id))
++        buttons=[json.loads(b['action']['payload']) for row in data['buttons'] for b in row]
++        payload=next(b for b in buttons if b['cmd']=='chat')
++        self.handlers.handle_driver(self.s,self.driver,States.D_IN_RIDE,'',payload,[])
++        self.assertEqual(get_data(self.s,101)['order_id'],parallel.id)
++        self.handlers.handle_driver(self.s,self.driver,States.D_CHAT,'Здравствуйте',{},[])
++        self.assertEqual(self.vk.send_message.call_args_list[-2].kwargs['peer_id'],201)
++
++    def test_actual_eta_no_cancels_without_second_confirmation(self):
++        order=self.order()
++        self.handlers._apply_eta(self.s,self.driver,order,5)
++        row=self.s.get(m.OutboxMessage,order.departure_prompt_outbox_id)
++        self.handlers.passenger_departure_response(self.s,self.passenger,True,order.id)
++        self.assertEqual(order.status,'cancelled')
++        self.assertIn('Заявка отменена',row.text)
++        self.assertNotIn('Ждёте',row.text)
++        self.assertEqual(json.loads(row.keyboard)['buttons'],[])
++
++    def test_actual_finish_and_parallel_transition_use_public_number_and_customer_price(self):
++        current,parallel=self.current_and_parallel()
++        current.public_number=2999;current.id=10500;self.s.flush()
++        self.handlers.driver_complete_ride(self.s,self.driver,'350')
++        texts=[c.args[1] for c in self.vk.send_message.call_args_list if len(c.args)>1]
++        self.assertTrue(any('🧾 Итог по поездке #2999:' in text for text in texts))
++        transition=next(text for text in texts if text.startswith('Переходим к заявке #3000:'))
++        self.assertIn('Цена клиента: 350 ₽',transition)
++        self.assertEqual(parallel.driver_id,self.driver.id)
++        self.assertEqual(parallel.status,'assigned')
++
++
++if __name__=='__main__':unittest.main()
+--- /dev/null
++++ b/tests/test_v181_fixes_isolated.py
+@@ -0,0 +1,11 @@
++"""Keep real ORM tests separate from legacy tests that stub common.models."""
++import subprocess
++import sys
++import unittest
++from pathlib import Path
++
++class RequestedFixesV181(unittest.TestCase):
++    def test_real_orm_requested_scenarios(self):
++        root=Path(__file__).resolve().parents[1]
++        result=subprocess.run([sys.executable,str(root/'tests/integration_v181_fixes.py')],cwd=root,capture_output=True,text=True,timeout=90)
++        self.assertEqual(result.returncode,0,result.stdout+result.stderr)

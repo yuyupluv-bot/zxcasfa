@@ -1,0 +1,137 @@
+{% extends 'base.html' %}
+{% block title %}Посты в чат{% endblock %}
+{% block content %}
+<div class="page-title">
+  <div>
+    <span class="eyebrow">Автопубликация</span>
+    <h1>Посты в отдельный чат</h1>
+    <p>Активные посты публикуются по кругу в порядке, указанном ниже.</p>
+  </div>
+</div>
+
+<form method="post" action="{{ url_for('rotating_posts_settings') }}" class="panel form-panel rotation-settings">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="section-title">
+    <h2>Расписание</h2>
+    <p>Первая публикация выполняется через полный интервал после включения.</p>
+  </div>
+  <div class="form-grid">
+    <label>
+      <span>Peer ID отдельного чата</span>
+      <input class="form-control" type="number" min="2000000001" name="peer_id" value="{{ peer_id }}" required>
+    </label>
+    <label>
+      <span>Интервал, минут</span>
+      <input class="form-control" type="number" min="1" name="interval" value="{{ interval }}" required>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="enabled" value="1" {% if enabled %}checked{% endif %}>
+      Автопубликация включена
+    </label>
+  </div>
+  <button class="btn btn-primary">Сохранить настройки</button>
+  {% if last_sent_at %}
+    <p class="text-muted mt-3 mb-0">Последний цикл: {{ last_sent_at }} · последний post ID: {{ last_post_id or '—' }}</p>
+  {% endif %}
+</form>
+
+<form method="post" action="{{ url_for('rotating_posts_check') }}" class="rotation-check">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="peer_id" value="{{ peer_id }}">
+  <button class="btn btn-outline-primary">Проверить доступ к чату</button>
+</form>
+
+<section class="rotation-create-section">
+<form method="post" enctype="multipart/form-data" action="{{ url_for('rotating_post_create') }}" class="panel form-panel rotation-create">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="section-title">
+    <h2><i class="bi bi-plus-circle"></i> Добавить новый пост</h2>
+    <p>Можно добавить текст, фото, видео или текст с медиа.</p>
+  </div>
+  <label class="wide">
+    <span>Текст</span>
+    <textarea class="form-control" name="text" rows="5" maxlength="4000"></textarea>
+  </label>
+  <label class="wide">
+    <span>Фото файлом</span>
+    <input class="form-control" type="file" name="photo" accept="image/jpeg,image/png,image/webp">
+    <small>JPG, PNG или WEBP. Фотография загрузится в VK после добавления поста.</small>
+  </label>
+  <label class="wide">
+    <span>Фото и видео VK по ссылке или ID</span>
+    <input class="form-control" name="attachments" placeholder="photo-1_2, video-1_3">
+    <small>До 10 вложений. Поддерживаются идентификаторы или ссылки VK вида photo-1_2 и video-1_3.</small>
+  </label>
+  <div class="form-grid">
+    <label>
+      <span>Порядок</span>
+      <input class="form-control" type="number" name="position" value="{{ (posts|length) + 1 }}">
+    </label>
+    <label class="check">
+      <input type="checkbox" name="is_active" value="1" checked>
+      Участвует в ротации
+    </label>
+  </div>
+  <button class="btn btn-primary">Добавить пост</button>
+</form>
+</section>
+
+<div class="rotation-list-heading">
+  <div>
+    <span class="eyebrow">Текущая очередь</span>
+    <h2>Посты в ротации</h2>
+  </div>
+  <span class="rotation-count">{{ posts|length }}</span>
+</div>
+
+<div class="bot-text-list rotation-post-list">
+{% for post in posts %}
+  <article class="panel bot-text-card rotation-post-card">
+    <div class="bot-text-head">
+      <div class="rotation-post-identity">
+        <span class="rotation-order">{{ post.position }}</span>
+        <div>
+          <strong>Пост #{{ post.id }}</strong>
+          <code>порядок {{ post.position }}</code>
+        </div>
+      </div>
+      <span class="status {{ 'success' if post.is_active else 'neutral' }}">{{ 'Активен' if post.is_active else 'Выключен' }}</span>
+    </div>
+    <form method="post" enctype="multipart/form-data" action="{{ url_for('rotating_post_update', post_id=post.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="wide">
+        <span>Текст</span>
+        <textarea class="form-control bot-textarea" name="text" rows="4" maxlength="4000">{{ post.text }}</textarea>
+      </label>
+      <label class="wide">
+        <span>Добавить фото файлом</span>
+        <input class="form-control" type="file" name="photo" accept="image/jpeg,image/png,image/webp">
+      </label>
+      <label class="wide">
+        <span>Фото и видео VK по ссылке или ID</span>
+        <input class="form-control" name="attachments" value="{{ post.attachments or '' }}">
+      </label>
+      <div class="form-grid">
+        <label>
+          <span>Порядок</span>
+          <input class="form-control" type="number" name="position" value="{{ post.position }}">
+        </label>
+        <label class="check">
+          <input type="checkbox" name="is_active" value="1" {% if post.is_active %}checked{% endif %}>
+          Участвует в ротации
+        </label>
+      </div>
+      <div class="rotation-card-actions">
+        <button class="btn btn-primary btn-sm">Сохранить</button>
+      </div>
+    </form>
+    <form method="post" action="{{ url_for('rotating_post_delete', post_id=post.id) }}" class="mt-2" onsubmit="return confirm('Удалить пост из ротации?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-outline-danger btn-sm">Удалить</button>
+    </form>
+  </article>
+{% else %}
+  <div class="panel empty-state">Постов пока нет.</div>
+{% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Политика конфиденциальности — БЕЗТАКСЫ</title>
+  <style>
+    :root{color-scheme:light dark;--bg:#f5f5f2;--card:#fff;--text:#20211f;--muted:#676a65;--line:#dedfd9;--accent:#d99a00;--soft:#fff5d7}
+    @media(prefers-color-scheme:dark){:root{--bg:#111512;--card:#1a1f1b;--text:#f3f4ef;--muted:#abb0a9;--line:#343b35;--soft:#302a18}}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+    main{width:min(820px,calc(100% - 32px));margin:40px auto 72px}.brand{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-weight:800;letter-spacing:.02em}
+    .mark{display:grid;place-items:center;width:44px;height:44px;border-radius:13px;background:var(--accent);color:#17130a;font-size:22px}
+    article{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:clamp(24px,5vw,52px);box-shadow:0 14px 38px rgba(0,0,0,.05)}
+    h1{font-size:clamp(30px,5vw,46px);line-height:1.1;letter-spacing:-.035em;margin:0 0 12px}h2{font-size:22px;margin:36px 0 10px}
+    p,li{color:var(--muted)}strong{color:var(--text)}ul{padding-left:22px}.date{display:inline-block;background:var(--soft);border-radius:999px;padding:6px 12px;color:var(--text);font-size:14px}
+    a{color:var(--accent);font-weight:650}footer{margin-top:26px;color:var(--muted);font-size:14px}@media(max-width:520px){main{margin-top:20px}article{border-radius:16px}}
+  </style>
+</head>
+<body>
+<main>
+  <div class="brand"><span class="mark">🚕</span><span>БЕЗТАКСЫ</span></div>
+  <article>
+    <h1>Политика конфиденциальности</h1>
+    <span class="date">Редакция от 29 сентября 2026 года</span>
+
+    <p><strong>Приложение:</strong> «БЕЗТАКСЫ — водитель».</p>
+    <p><strong>Оператор:</strong> самозанятая Перунова Анастасия Анатольевна.</p>
+    <p><strong>Контакт по вопросам персональных данных:</strong>
+      <a href="mailto:ilia.gat@yandex.ru">ilia.gat@yandex.ru</a>.
+    </p>
+
+    <h2>Какие данные обрабатываются</h2>
+    <p>Приложение обрабатывает только сведения, необходимые для подключения водителя и доставки рабочих уведомлений:</p>
+    <ul>
+      <li>имя водителя, полученное при привязке приложения;</li>
+      <li>Firebase push-токен устройства;</li>
+      <li>внутренний идентификатор установки и случайный секрет установки;</li>
+      <li>технические данные уведомления: тип и номер заявки, маршрут и параметры сигнала.</li>
+    </ul>
+    <p>Приложение <strong>не запрашивает</strong> геолокацию, контакты, SMS, журнал звонков, камеру, микрофон и доступ к пользовательским файлам.</p>
+
+    <h2>Цели обработки</h2>
+    <p>Данные используются только для привязки устройства к водителю, доставки уведомлений о новых и параллельных заявках и их отмене, а также для управления звуком и вибрацией. Данные не продаются, не используются для рекламы и профилирования.</p>
+
+    <h2>Передача и инфраструктура</h2>
+    <p>Уведомления доставляются через Firebase Cloud Messaging (Google). Сервер сервиса «БЕЗТАКСЫ» доступен на домене <strong>panel.bezrateadminps.ru</strong>. Передача данных между приложением и сервером выполняется по HTTPS.</p>
+
+    <h2>Хранение и удаление</h2>
+    <p>Push-токен и данные установки хранятся, пока устройство подключено. Водитель может удалить их через <strong>Настройки → Отключить устройство</strong>. После подтверждения запись установки и push-токен удаляются с сервера. Дополнительный запрос на удаление можно отправить на <a href="mailto:ilia.gat@yandex.ru">ilia.gat@yandex.ru</a>.</p>
+
+    <h2>Защита данных</h2>
+    <p>Привязка выполняется ограниченным по времени кодом. Постоянный секрет установки передаётся по HTTPS и хранится на сервере только в виде криптографического SHA-256-хеша. Доступ к настройкам модерационного кода имеет только авторизованный администратор.</p>
+
+    <h2>Изменения политики</h2>
+    <p>Новая редакция политики публикуется на этой странице с указанием даты обновления.</p>
+  </article>
+  <footer>© 2026 БЕЗТАКСЫ · Перунова Анастасия Анатольевна</footer>
+</main>
+</body>
+</html>

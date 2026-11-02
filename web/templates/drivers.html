@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% block title %}Водители{% endblock %}
+{% block content %}
+<div class="page-title drivers-heading">
+  <div>
+    <span class="eyebrow">Работа водителей</span>
+    <h1>Водители</h1>
+    <p>Выполненные заявки за последние 7 дней · Екатеринбург (UTC+5)</p>
+  </div>
+</div>
+
+<section class="driver-week-summary">
+  <article class="metric green">
+    <i class="bi bi-check-circle"></i>
+    <div><span>Выполнено за неделю</span><strong>{{ stats.total }}</strong><small>Последние 7 календарных дней</small></div>
+  </article>
+  <article class="metric blue">
+    <i class="bi bi-people"></i>
+    <div><span>Выполняли заявки</span><strong>{{ stats.drivers }}</strong><small>водителей за неделю</small></div>
+  </article>
+  <article class="metric violet">
+    <i class="bi bi-speedometer2"></i>
+    <div><span>В среднем</span><strong>{{ '%.1f'|format(stats.total / stats.drivers) if stats.drivers else '0' }}</strong><small>заявки на водителя</small></div>
+  </article>
+</section>
+
+<section class="drivers-section" aria-labelledby="week-drivers-title">
+  <div class="section-heading-row">
+    <div><span class="record-kind order-kind"><i class="bi bi-calendar-week"></i> 7 дней</span><h2 id="week-drivers-title">Выполненные заявки по водителям</h2></div>
+    <small>Сортировка по недельному количеству</small>
+  </div>
+  <div class="panel table-panel driver-week-table"><div class="table-responsive"><table class="table align-middle">
+    <thead><tr><th>Место</th><th>Водитель</th>{% for day in stats.days %}<th>{{ day.label }}<small>{{ day.date }}</small></th>{% endfor %}<th>За неделю</th></tr></thead>
+    <tbody>
+    {% for row in stats.rows %}<tr><td><strong>{{ row.place }}</strong></td><td><strong>{{ row.name }}</strong><small>{{ row.car }}</small></td>{% for count in row.counts %}<td>{{ count }}</td>{% endfor %}<td><span class="status success">{{ row.total }}</span></td></tr>
+    {% else %}<tr><td colspan="10" class="empty">За последние 7 дней выполненных заявок нет</td></tr>{% endfor %}
+    {% if stats.rows %}<tr class="total-row"><td></td><td><strong>Итого</strong></td>{% for count in stats.totals %}<td><strong>{{ count }}</strong></td>{% endfor %}<td><strong>{{ stats.total }}</strong></td></tr>{% endif %}
+    </tbody>
+  </table></div></div>
+</section>
+
+<section class="drivers-section rating-leaderboard" aria-labelledby="driver-rating-title">
+  <div class="section-heading-row">
+    <div><span class="record-kind rating-kind"><i class="bi bi-star"></i> Рейтинг</span><h2 id="driver-rating-title">Все водители и отзывы</h2></div>
+    <small>Сначала водители с наибольшим количеством отзывов</small>
+  </div>
+  <div class="panel table-panel"><div class="table-responsive"><table class="table align-middle">
+    <thead><tr><th>Место</th><th>Водитель</th><th>Автомобиль</th><th>Отзывов</th><th>Средняя оценка</th></tr></thead>
+    <tbody>
+    {% for driver in rating_rows %}<tr>
+      <td><strong>{{ loop.index }}</strong></td>
+      <td><strong>{{ driver.full_name or ('id' ~ driver.vk_id) }}</strong><small>VK ID: {{ driver.vk_id }}</small></td>
+      <td>{{ driver.car_full }}</td>
+      <td><span class="review-count">{{ driver.rating_count or 0 }}</span></td>
+      <td>{% if driver.rating_count %}<span class="driver-rating"><i class="bi bi-star-fill"></i> {{ '%.1f'|format(driver.rating) }}</span>{% else %}<span class="muted">Нет оценок</span>{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="empty">Водителей пока нет</td></tr>{% endfor %}
+    </tbody>
+  </table></div></div>
+</section>
+{% endblock %}

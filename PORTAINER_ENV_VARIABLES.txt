@@ -1,0 +1,52 @@
+Обязательные переменные Portainer Stack
+========================================
+POSTGRES_DB=taxi
+POSTGRES_USER=taxi
+POSTGRES_PASSWORD=<openssl rand -hex 24>
+
+VK_TOKEN=<токен сообщества>
+VK_CHAT_USER_TOKEN=<пользовательский токен или пусто>
+VK_GROUP_ID=<числовой ID сообщества>
+ADMIN_VK_IDS=<VK ID администраторов через запятую>
+
+SECRET_KEY=<openssl rand -hex 32>
+ADMIN_LOGIN=admin
+ADMIN_PASSWORD=<openssl rand -hex 16 или свой сложный пароль>
+ADMIN_PASSWORD_HASH=
+
+ADMIN_PORT=3000
+FLASK_COOKIE_SECURE=0
+TZ=Asia/Yekaterinburg
+
+Рекомендуемые значения
+======================
+VK_API_VERSION=5.199
+DB_POOL_SIZE=10
+DB_MAX_OVERFLOW=10
+DB_POOL_TIMEOUT=10
+DB_POOL_RECYCLE=280
+BOT_WORKERS=16
+BOT_MAX_PENDING_EVENTS=1000
+OUTBOX_WORKERS=8
+TIMER_WORKERS=8
+SETTINGS_CACHE_TTL=30
+MAINTENANCE_INTERVAL=60
+PROCESSED_EVENTS_RETENTION_HOURS=12
+OUTBOX_RETENTION_HOURS=24
+DRIVER_FALLBACK_CHAT_PEER_ID=0
+DRIVER_CHAT_PEER_ID=0
+DRIVER_ACCEPT_TIMEOUT=60
+DRIVER_CHAT_TIMEOUT=2700
+DISPATCHER_COMMISSION=0.10
+PASSENGER_POLL_TIMEOUT=60
+VERIFY_ENABLED=true
+VERIFY_MIN_FRIENDS=10
+VERIFY_MIN_ACCOUNT_MONTHS=6
+VERIFY_TTL_DAYS=30
+MAPS_PROVIDER=yandex
+MAPS_API_KEY=
+SUPPORT_LINK=https://vk.me/club<GROUP_ID>
+LOG_LEVEL=INFO
+
+Не загружайте реальные значения в GitHub. Добавляйте их только в разделе
+Environment variables при создании или редактировании Stack в Portainer.

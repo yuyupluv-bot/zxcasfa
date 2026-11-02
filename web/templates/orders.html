@@ -1,0 +1,206 @@
+{% extends 'base.html' %}
+{% block title %}Заявки и брони{% endblock %}
+{% block content %}
+<div class="page-title orders-heading">
+  <div>
+    <span class="eyebrow">Операции</span>
+    <h1>Заявки и брони</h1>
+    <p>Контроль поездок, предварительных броней и ежемесячная выгрузка.</p>
+  </div>
+  <div class="orders-counts" aria-label="Количество показанных записей">
+    <span><i class="bi bi-receipt"></i><b>{{ orders|length }}</b> заявок</span>
+    <span><i class="bi bi-calendar-check"></i><b>{{ bookings|length }}</b> броней</span>
+  </div>
+</div>
+
+<form class="filterbar orders-filterbar" method="get">
+  <select name="status" class="form-select" aria-label="Статус">
+    <option value="">Все статусы</option>
+    <optgroup label="Заявки">
+      {% for st,label in order_status_labels.items() %}
+        <option value="{{ st }}" {% if status==st %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </optgroup>
+    <optgroup label="Брони">
+      {% for st,label in booking_status_labels.items() if st not in order_status_labels %}
+        <option value="{{ st }}" {% if status==st %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </optgroup>
+  </select>
+  <input name="q" value="{{ q }}" class="form-control" placeholder="Пассажир, водитель или маршрут">
+  <button class="btn btn-primary"><i class="bi bi-search"></i> Найти</button>
+  <a class="btn btn-success" href="{{ url_for('export_orders', status=status, q=q) }}">
+    <i class="bi bi-file-earmark-excel"></i> Выгрузить найденные
+  </a>
+  <a class="btn btn-outline-success" href="{{ url_for('export_orders') }}">
+    <i class="bi bi-download"></i> Полный Excel
+  </a>
+</form>
+<p class="filter-hint">Excel содержит отдельные листы «Заказы» и «Брони». Архивный сброс формирует собственную выгрузку автоматически.</p>
+
+<section class="records-section" aria-labelledby="orders-title">
+  <div class="section-heading-row">
+    <div>
+      <span class="record-kind order-kind"><i class="bi bi-receipt"></i> Заявки</span>
+      <h2 id="orders-title">Обычные заявки</h2>
+    </div>
+    <small>Показано до 200 последних записей</small>
+  </div>
+  <div class="panel table-panel">
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>#</th><th>Пассажир</th><th>Водитель</th><th>Маршрут</th><th>Цена</th><th>Статус</th><th>Создана</th><th>Действия</th></tr></thead>
+        <tbody>
+        {% for o in orders %}
+          <tr>
+            <td><strong>{{ o.public_number or o.id }}</strong></td>
+            <td>{{ o.customer_name or (o.passenger.full_name if o.passenger else '—') }}</td>
+            <td>{{ o.driver.full_name if o.driver else '—' }}</td>
+            <td class="route">{{ o.address_from }} <i class="bi bi-arrow-right"></i> {{ o.address_to }}</td>
+            <td>{{ ('%.0f'|format(o.price)) if o.price else '—' }} ₽</td>
+            <td><span class="status neutral">{{ order_status_labels.get(o.status,o.status) }}</span></td>
+            <td>{{ o.created_at|dt }}</td>
+            <td>
+            {% if o.status not in ['completed','cancelled'] %}
+              <div class="actions">
+                <form method="post" action="{{ url_for('assign_driver',order_id=o.id) }}" class="assign">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <select name="driver_id" class="form-select form-select-sm">
+                    <option value="">Водитель</option>
+                    {% for d in drivers %}<option value="{{ d.id }}">{{ d.full_name or d.vk_id }}</option>{% endfor %}
+                  </select>
+                  <button class="btn btn-sm btn-outline-primary">Назначить</button>
+                </form>
+                <form method="post" action="{{ url_for('cancel_order',order_id=o.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-outline-danger">Отменить</button>
+                </form>
+              </div>
+            {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="8" class="empty">По заданным фильтрам заявок нет</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="records-section booking-section" aria-labelledby="bookings-title">
+  <div class="section-heading-row">
+    <div>
+      <span class="record-kind booking-kind"><i class="bi bi-calendar-check"></i> Брони</span>
+      <h2 id="bookings-title">Предварительные брони</h2>
+    </div>
+    <small>Брони выделены отдельно и не смешиваются с обычными заявками</small>
+  </div>
+  <div class="panel table-panel bookings-table">
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>№ брони</th><th>Пассажир</th><th>Водитель</th><th>Маршрут</th><th>Когда ехать</th><th>Тип</th><th>Статус</th><th>Создана</th><th>Действия</th></tr></thead>
+        <tbody>
+        {% for b in bookings %}
+          <tr>
+            <td><strong>Б-{{ b.public_number or b.id }}</strong></td>
+            <td>{{ b.passenger.full_name if b.passenger else '—' }}</td>
+            <td>{{ b.driver.full_name if b.driver else '—' }}</td>
+            <td class="route">{{ b.from_address }} <i class="bi bi-arrow-right"></i> {{ b.to_address or '—' }}</td>
+            <td><strong>{{ b.scheduled_at|dt }}</strong></td>
+            <td><span class="record-kind booking-kind compact">{{ booking_type_labels.get(b.type,b.type) }}</span></td>
+            <td><span class="status warning">{{ booking_status_labels.get(b.status,b.status) }}</span></td>
+            <td>{{ b.created_at|dt }}</td>
+            <td>
+              {% if b.status in ['pending','assigned','driver_en_route'] %}
+                <form method="post" action="{{ url_for('cancel_booking', booking_id=b.id) }}" data-booking-cancel-form>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-outline-danger">Отменить бронь</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="9" class="empty">По заданным фильтрам броней нет</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="monthly-reset panel" aria-labelledby="reset-title">
+  <div class="reset-copy">
+    <span class="record-kind reset-kind"><i class="bi bi-archive"></i> Архивирование</span>
+    <h2 id="reset-title">Выгрузить и сбросить историю</h2>
+    <p>Сначала формирует Excel, затем удаляет из базы завершённые и отменённые заявки и брони. Активные заявки, очередь пассажиров, очередь водителей и действующие таймеры сохраняются.</p>
+    <ul>
+      <li>Excel начнёт скачиваться автоматически после подтверждения.</li>
+      <li>Ожидающие и выполняемые заявки останутся в системе.</li>
+      <li>Операцию нельзя отменить после подтверждения.</li>
+    </ul>
+  </div>
+  <form method="post" action="{{ url_for('reset_orders') }}" class="reset-action" data-reset-form>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="confirmation" value="yes">
+    <strong>Архивирование закрытых заявок</strong>
+    <p class="reset-action-note">Отзывы, рейтинги, «Моя машина», реквизиты, профили и активная очередь не изменятся. Если активных записей не осталось, номера заявок и броней начнутся с #1.</p>
+    <button class="btn btn-danger">
+      <i class="bi bi-file-earmark-arrow-down"></i> Скачать Excel и сбросить заявки
+    </button>
+    <small><i class="bi bi-shield-check"></i> Удаляются только записи, попавшие в скачиваемый Excel.</small>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelector('[data-reset-form]')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!window.confirm('Сформировать Excel и удалить завершённые и отменённые заявки и брони? Активная очередь сохранится.')) {
+    return;
+  }
+  const form = event.currentTarget;
+  const button = form.querySelector('button');
+  button.disabled = true;
+  try {
+    const response = await fetch(form.action, {
+      method: 'POST',
+      body: new FormData(form),
+      credentials: 'same-origin',
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    // When there was history, preserve the automatic Excel download. A
+    // download response does not navigate the browser, so the previous page
+    // remained visually stale and continued showing an already deleted #4677.
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('spreadsheetml')) {
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i);
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = match ? decodeURIComponent(match[1]) : 'orders_archive.xlsx';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+    }
+    // Force a fresh GET after the transaction committed so deleted records
+    // disappear and the next #1 can be checked without a manual refresh.
+    window.location.href = `{{ url_for('orders') }}?reset_done=${Date.now()}`;
+  } catch (error) {
+    button.disabled = false;
+    window.alert('Не удалось выполнить сброс. Обновите страницу и попробуйте ещё раз.');
+  }
+});
+document.querySelectorAll('[data-booking-cancel-form]').forEach((form) => {
+  form.addEventListener('submit', (event) => {
+    if (!window.confirm('Отменить эту бронь? Пассажир и назначенный водитель получат уведомление.')) {
+      event.preventDefault();
+    }
+  });
+});
+</script>
+{% endblock %}

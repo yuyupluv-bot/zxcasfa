@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}Суточники{% endblock %}
+{% block content %}
+<div class="page-title temp-drivers-heading">
+  <div>
+    <span class="eyebrow">Временные роли водителей</span>
+    <h1>Суточники</h1>
+    <p>Выдача, продление и снятие временной роли · Екатеринбург (UTC+5)</p>
+  </div>
+</div>
+
+<section class="temp-summary">
+  <article class="metric green"><i class="bi bi-person-check"></i><div><span>Активны</span><strong>{{ active_count }}</strong><small>роль уже действует</small></div></article>
+  <article class="metric blue"><i class="bi bi-clock-history"></i><div><span>Запланированы</span><strong>{{ scheduled_count }}</strong><small>ожидают даты выдачи</small></div></article>
+  <article class="metric amber"><i class="bi bi-hourglass-split"></i><div><span>Завершают работу</span><strong>{{ finishing_count }}</strong><small>роль снимется после заявки</small></div></article>
+</section>
+
+<section class="panel temp-create-panel">
+  <div class="section-title">
+    <h2><i class="bi bi-person-plus"></i> Добавить суточника</h2>
+    <p>Оставьте начало пустым, чтобы выдать роль сразу. Если дата будущая — роль включится автоматически.</p>
+  </div>
+  <form method="post" action="{{ url_for('create_temporary_driver') }}" class="temp-create-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label><span>Пользователь VK</span><input class="form-control" name="vk_reference" placeholder="Ссылка, @имя или id123" required></label>
+    <label><span>Дата и время начала</span><input class="form-control" type="datetime-local" name="starts_at"><small>Пусто — выдать сейчас</small></label>
+    <label><span>Срок, дней</span><input class="form-control" type="number" name="days" min="1" max="365" value="1" required></label>
+    <button class="btn btn-primary"><i class="bi bi-plus-circle"></i> Добавить суточника</button>
+  </form>
+</section>
+
+<section class="temp-list-section">
+  <div class="section-heading-row">
+    <div><span class="record-kind temp-kind"><i class="bi bi-clock"></i> Управление</span><h2>Активные и запланированные</h2></div>
+    <small>О каждом изменении пользователь получает сообщение в VK</small>
+  </div>
+  <div class="panel table-panel"><div class="table-responsive"><table class="table align-middle temp-drivers-table">
+    <thead><tr><th>Суточник</th><th>Статус</th><th>Начало</th><th>Окончание</th><th>Продлить</th><th>Действие</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td><strong>{{ row.user.full_name or ('id' ~ row.user.vk_id) }}</strong><small><a href="{{ ('https:' ~ '//' ~ 'vk.com/id' ~ row.user.vk_id) }}" target="_blank" rel="noopener">id{{ row.user.vk_id }}</a></small></td>
+        <td>
+          {% if row.state == 'scheduled' %}<span class="status neutral"><i class="bi bi-clock-history"></i> Запланирован</span>
+          {% elif row.state == 'finishing' %}<span class="status warning"><i class="bi bi-hourglass-split"></i> Завершает заявку</span>
+          {% else %}<span class="status success"><i class="bi bi-check-circle"></i> Активен</span>{% endif %}
+        </td>
+        <td>{{ row.starts_at|dt if row.starts_at else 'Выдан сразу' }}</td>
+        <td><strong>{{ row.until|dt }}</strong></td>
+        <td>
+          <form method="post" action="{{ url_for('extend_temporary_driver', user_id=row.user.id) }}" class="temp-extend-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input class="form-control" type="number" name="days" min="1" max="365" value="1" aria-label="Дней продления" required>
+            <button class="btn btn-outline-primary btn-sm">Продлить</button>
+          </form>
+        </td>
+        <td>
+          {% if row.state == 'scheduled' %}
+          <form method="post" action="{{ url_for('cancel_scheduled_temporary_driver', user_id=row.user.id) }}" onsubmit="return confirm('Отменить запланированную выдачу роли?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-outline-danger btn-sm">Отменить выдачу</button>
+          </form>
+          {% else %}
+          <form method="post" action="{{ url_for('remove_temporary_driver', user_id=row.user.id) }}" onsubmit="return confirm('Снять временную роль водителя?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-outline-danger btn-sm">Снять суточника</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}<tr><td colspan="6" class="empty">Суточников пока нет</td></tr>{% endfor %}
+    </tbody>
+  </table></div></div>
+</section>
+{% endblock %}

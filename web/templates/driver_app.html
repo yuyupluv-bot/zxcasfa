@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Приложение водителей{% endblock %}
+{% block content %}
+<div class="page-title">
+  <div>
+    <span class="eyebrow">Android</span>
+    <h1>Приложение водителей</h1>
+    <p>Управление сигналами и доступом для проверки в RuStore.</p>
+  </div>
+</div>
+
+<div class="panel form-panel mb-4">
+  <div class="section-title">
+    <h2><i class="bi bi-shield-check"></i> Код для модератора RuStore</h2>
+    <p>Многоразовый код действует 30 дней. Его можно отозвать в любой момент.</p>
+  </div>
+
+  {% if review_code %}
+  <div class="alert alert-success">
+    <div class="small mb-1">Скопируйте код сейчас — после обновления страницы он будет скрыт.</div>
+    <div class="display-6 fw-bold font-monospace user-select-all">{{ review_code }}</div>
+  </div>
+  {% endif %}
+
+  {% if review_pairing %}
+  <div class="alert alert-info">
+    <strong>Активный код создан.</strong><br>
+    Водитель: {{ review_pairing.driver.full_name or review_pairing.driver.vk_id }}<br>
+    Действует до: {{ review_pairing.expires_at.strftime('%d.%m.%Y %H:%M') }}
+  </div>
+  <form method="post" class="mb-3">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="revoke_review_code">
+    <button class="btn btn-outline-danger" type="submit">
+      <i class="bi bi-x-circle"></i> Отозвать код
+    </button>
+  </form>
+  {% endif %}
+
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="create_review_code">
+    <label>
+      <span>Тестовый водитель</span>
+      <select class="form-select" name="driver_id" required>
+        <option value="">Выберите водителя</option>
+        {% for driver in drivers %}
+        <option value="{{ driver.id }}">
+          {{ driver.full_name or ('VK ID ' ~ driver.vk_id) }}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="d-flex align-items-end">
+      <button class="btn btn-primary w-100" type="submit">
+        <i class="bi bi-key"></i>
+        {{ "Заменить код" if review_pairing else "Создать код на 30 дней" }}
+      </button>
+    </div>
+  </form>
+  <p class="text-muted small mb-0">
+    Создайте отдельного тестового водителя без активных заказов. Передайте код
+    в поле «Комментарий для модератора» в кабинете RuStore. Сам код в базе не хранится.
+  </p>
+</div>
+
+<form method="post" enctype="multipart/form-data" class="panel form-panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="action" value="save_scenarios">
+  <div class="section-title">
+    <h2><i class="bi bi-bell"></i> Сценарии уведомлений</h2>
+    <p>Настройки по умолчанию для сигналов приложения.</p>
+  </div>
+  {% for s in scenarios %}
+  <div class="section-title"><h2>{{ s.title }}</h2></div>
+  <div class="form-grid">
+    <label>
+      <span>Длительность, сек</span>
+      <input class="form-control" type="number" min="1" max="600"
+             name="{{ s.event_key }}_duration" value="{{ s.duration_seconds }}">
+    </label>
+    <label>
+      <span>Повтор, сек</span>
+      <input class="form-control" type="number" min="1" max="60"
+             name="{{ s.event_key }}_repeat" value="{{ s.repeat_seconds }}">
+    </label>
+    <label>
+      <span>Свой звук</span>
+      <input class="form-control" type="file" accept="audio/*"
+             name="{{ s.event_key }}_sound">
+    </label>
+    <label class="check">
+      <input type="checkbox" value="1" name="{{ s.event_key }}_vibrate"
+             {% if s.vibrate %}checked{% endif %}> Вибрация
+    </label>
+    <label class="check">
+      <input type="checkbox" value="1" name="{{ s.event_key }}_enabled"
+             {% if s.enabled %}checked{% endif %}> Включено
+    </label>
+    {% if s.sound_file %}<audio controls src="{{ s.sound_file }}"></audio>{% endif %}
+  </div>
+  <hr>
+  {% endfor %}
+  <button class="btn btn-primary" type="submit">Сохранить настройки</button>
+</form>
+
+<div class="panel mt-3">
+  Обычный водитель получает одноразовый код в VK-боте:
+  <b>Мои сведения → Подключить приложение</b>. Такой код действует 10 минут.
+</div>
+{% endblock %}

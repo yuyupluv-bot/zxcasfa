@@ -1,0 +1,5 @@
+{
+  "main": "bothost_main.py",
+  "language": "python",
+  "python_version": "3.11"
+}
