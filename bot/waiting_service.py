@@ -4,8 +4,8 @@ Flow:
   * driver marks «arrived / Заезд» and waiting starts automatically;
   * «Пассажир сел» stops the automatic waiting window;
   * during the ride the driver can start another waiting window manually;
-  * after boarding, all manual windows share one free balance of
-    ``free_waiting_minutes``; pressing the button never grants it again;
+  * all waiting windows share one free balance of
+    ``free_waiting_minutes`` for the entire order;
   * «Продолжить поездку» stops the meter (can be toggled repeatedly);
   * at finish the total minutes and cost are frozen on the order.
 
@@ -75,22 +75,18 @@ def current_ride_seconds(order: Order) -> int:
 
 
 def free_remaining_seconds(session: Session, order: Order) -> int:
-    """Remaining part of the single post-boarding free allowance."""
+    """Remaining free time across arrival and in-ride waiting."""
     free_seconds = max(get_int(session, "free_waiting_minutes", 3), 0) * 60
-    return max(free_seconds - current_ride_seconds(order), 0)
+    return max(free_seconds - current_seconds(order), 0)
 
 
 def _cost_for(session: Session, total_seconds: int, ride_seconds: int = 0) -> tuple[int, float]:
     free = get_int(session, "free_waiting_minutes", 3)
     rate = get_float(session, "price_per_waiting_minute", 10)
-    ride_seconds = max(min(int(ride_seconds), int(total_seconds)), 0)
-    before_boarding_seconds = max(int(total_seconds) - ride_seconds, 0)
-    before_minutes = int(round(before_boarding_seconds / 60))
-    ride_minutes = int(round(ride_seconds / 60))
-    # Arrival waiting and in-ride waiting each have their own one-time free
-    # allowance. Within the ride, every button press uses the same balance.
-    billable = max(before_minutes - free, 0) + max(ride_minutes - free, 0)
-    return before_minutes + ride_minutes, round(billable * rate, 2)
+    # Keep the existing rounding convention, applied once to the total.
+    minutes = int(round(max(int(total_seconds), 0) / 60))
+    billable = max(minutes - max(free, 0), 0)
+    return minutes, round(billable * rate, 2)
 
 
 def snapshot(session: Session, order: Order) -> tuple[int, float]:

@@ -75,7 +75,7 @@ class DirectDriverSelectionV95(unittest.TestCase):
         self.assertIn("requested_driver_id", direct_offer)
         self.assertNotIn("next_waiting_driver", direct_offer)
         decline = function_source(self.handlers, "driver_decline")
-        direct_branch = decline.split("if order.requested_driver_id:", 1)[1].split("# Explicit handoff", 1)[0]
+        direct_branch = decline.split("if order.requested_driver_id:", 1)[1].split("from . import parallel_orders", 1)[0]
         self.assertIn('order.status = "cancelled"', direct_branch)
         self.assertIn("Данный водитель не может взять заказ. Попробуйте выбрать другого водителя.", direct_branch)
         self.assertNotIn("offer_to_next_driver", direct_branch)

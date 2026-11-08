@@ -478,6 +478,15 @@ def _handle_message_impl(session: Session, event) -> None:
     if vk_id < 0:  # ignore messages from groups/communities
         return
 
+    # A notice failure must not break normal message processing.
+    if int(message.get("peer_id") or 0) >= 2_000_000_000:
+        try:
+            from . import common_chat_notices
+            with session.begin_nested():
+                common_chat_notices.handle_message(session, message)
+        except Exception:  # noqa: BLE001
+            log.exception("Common-chat notice processing failed")
+
     # Blocked IDs are handled before user lookup and attachment hydration. The
     # first message gets one notice; every later message is dropped silently.
     blocked_ids = _cached_blocked_vk_ids(session)
@@ -4048,12 +4057,12 @@ def show_pending_orders(session: Session, user: User, page=1) -> None:
     except (TypeError, ValueError):
         page = 1
     query = _pending_orders_query(session)
-    total = query.count()
+    visible = [order for order in query.order_by(Order.created_at.asc(), Order.id.asc()).all()
+               if parallel_orders.local_line_allows(order, user)]
+    total = len(visible)
     total_pages = max(1, (total + PENDING_ORDERS_PER_PAGE - 1) // PENDING_ORDERS_PER_PAGE)
     page = min(page, total_pages)
-    orders = (query.order_by(Order.created_at.asc(), Order.id.asc())
-              .offset((page - 1) * PENDING_ORDERS_PER_PAGE)
-              .limit(PENDING_ORDERS_PER_PAGE).all())
+    orders = visible[(page - 1) * PENDING_ORDERS_PER_PAGE:page * PENDING_ORDERS_PER_PAGE]
     if not orders:
         text = "⏳ Сейчас нет ожидающих заявок."
     else:
@@ -4138,6 +4147,8 @@ def driver_take_pending(session: Session, user: User, order_id) -> None:
         vk.send_message(user.vk_id, "Заявку уже взял или рассматривает другой водитель.")
         return show_pending_orders(session, user)
 
+    if not parallel_orders.local_line_allows(order, user):
+        return vk.send_message(user.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
     # Offline/away drivers become active on their saved line before assignment.
     city_id = lines.city_id_by_name(session, user.current_line)
     if not city_id:
@@ -4326,6 +4337,8 @@ def driver_accept(
             return
         vk.send_message(user.vk_id, "Заявка уже недоступна.")
         return show_main_menu(session, user)
+    if not parallel_orders.local_line_allows(order, user):
+        return vk.send_message(user.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
     # Requirement 5/7: a driver blocked for cancelling cannot take new orders.
     if driver_block_service.is_blocked(user):
         vk.send_message(user.vk_id, msg(session, "msg_driver_blocked", until=driver_block_service.blocked_until_text(user)))
@@ -4546,6 +4559,17 @@ def driver_decline(session: Session, user: User, order_id: int, cat: str) -> Non
             "direct_driver_decline",
             f"order={order.id} driver={user.id} reason={cat}",
         )
+        passenger_queue.try_promote(session)
+        return
+
+    from . import parallel_orders
+    if parallel_orders.local_village_line(order) and cat in ("to_driver_chat", "delivery", "far", "low_price"):
+        order_service.add_decline(session, order, user.id, cat)
+        order.status = "searching"
+        session.flush()
+        set_state(session, user.vk_id, States.D_MENU)
+        vk.send_message(user.vk_id, "Заявка передаётся водителям своей линии.", keyboard=on_line_kb)
+        order_service.offer_to_next_driver(session, order)
         passenger_queue.try_promote(session)
         return
 
@@ -6269,7 +6293,9 @@ def disp_create_order_from_draft(session: Session, user: User) -> None:
             lambda order_id=order.id: passenger_queue._dispatcher_unclaimed_timeout(order_id),
         )
     set_state(session, user.vk_id, States.DISP_MENU, {}, merge=False)
-    if car_count == 2:
+    if parallel_orders.local_village_line(orders[0]):
+        confirmation = "✅ Заявка создана. Ищем водителя на соответствующей линии."
+    elif car_count == 2:
         # До V130 две заявки уходили «по порядку очереди»; теперь обе идут в чат.
         ids = " и ".join(f"#{order.number}" for order in orders)
         confirmation = (
@@ -7627,9 +7653,11 @@ def driver_take_from_chat(session: Session, user: User, order_id) -> None:
         _chat_claim_reply(session, user, f"заявка №{order_id} не найдена.")
         log.warning("Chat claim: order %s not found (driver=%s)", order_id, user.id)
         return vk.send_message(user.vk_id, "Заявка уже недоступна.")
+    from . import parallel_orders
+    if not parallel_orders.local_line_allows(order, user):
+        return vk.send_message(user.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
     active = active_order_for(session, user, as_driver=True)
     if active and active.id != order.id:
-        from . import parallel_orders
         if parallel_orders.has_pending(session, user):
             _chat_claim_reply(
                 session, user,

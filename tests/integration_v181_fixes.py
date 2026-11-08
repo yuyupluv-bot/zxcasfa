@@ -207,7 +207,9 @@ class FixesV181(unittest.TestCase):
                      requested_driver_id=self.driver.id if personal else None,customer_price=350)
         self.s.query(m.DriverQueue).filter_by(driver_id=self.driver.id).one().status='offered';self.s.flush()
         if no_chat:self.settings['driver_fallback_chat_peer_id']=0
-        with relative_modules(outbox_service=self.outbox):self.h['driver_decline'](self.s,self.driver,o.id,'to_driver_chat')
+        parallel=types.ModuleType('v173_runtime.parallel_orders')
+        parallel.local_village_line=lambda order:None # this handoff is not a local village trip
+        with relative_modules(outbox_service=self.outbox,parallel_orders=parallel):self.h['driver_decline'](self.s,self.driver,o.id,'to_driver_chat')
         return o
 
     def test_handoff_mentions_all_keeps_first_and_has_exact_passenger_notice(self):

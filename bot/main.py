@@ -161,7 +161,11 @@ def _event_actor_id(event) -> int:
     try:
         if event.type in (VkBotEventType.MESSAGE_NEW, VkBotEventType.MESSAGE_REPLY):
             message = _event_message(event)
-            return int(message.get("from_id") or message.get("peer_id") or 0)
+            peer_id = int(message.get("peer_id") or 0)
+            # Serialize each chat so a reply cannot overtake the original.
+            if peer_id >= 2_000_000_000:
+                return peer_id
+            return int(message.get("from_id") or peer_id or 0)
         obj = event.obj
         value = getattr(obj, "user_id", None)
         if value is None and isinstance(obj, dict):

@@ -42,6 +42,6 @@ class RemoveTelegramForkV57Tests(unittest.TestCase):
                 revisions[vals["revision"]]=path.name
                 if vals.get("down_revision"): parents.add(vals["down_revision"])
         self.assertTrue(parents.issubset(revisions))
-        self.assertEqual({"0053_driver_app_commands"}, set(revisions)-parents)
+        self.assertEqual({"0054_common_chat_notices"}, set(revisions)-parents)
 
 if __name__=="__main__": unittest.main()

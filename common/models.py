@@ -289,7 +289,7 @@ class Order(Base):
     waiting_started_at = Column(DateTime(timezone=True))
     waiting_seconds = Column(Integer, default=0, nullable=False)
     # Subset of waiting_seconds accumulated after «Пассажир сел». This keeps
-    # one shared free in-ride allowance across every press of «Ожидание».
+    # the historical breakdown, while the free allowance applies to the total.
     ride_waiting_seconds = Column(Integer, default=0, nullable=False)
     waiting_minutes = Column(Integer, default=0, nullable=False)
     waiting_cost = Column(Numeric(10, 2), default=0, nullable=False)
@@ -638,6 +638,19 @@ class OutboxMessage(Base):
     sent_at = Column(DateTime(timezone=True))
     last_error = Column(Text)
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False, index=True)
+
+
+class CommonChatNotice(Base):
+    """Tracked driver notifications for a passenger message in the posts chat."""
+    __tablename__ = "common_chat_notices"
+    id = Column(Integer, primary_key=True)
+    peer_id = Column(BigInteger, nullable=False)
+    conversation_message_id = Column(BigInteger, nullable=False)
+    vk_message_id = Column(BigInteger)
+    outbox_ids = Column(Text, nullable=False, default="[]")
+    answered = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
+    __table_args__ = (UniqueConstraint("peer_id", "conversation_message_id", name="uq_common_chat_notice"),)
 
 
 class ProcessedEvent(Base):

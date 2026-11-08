@@ -83,6 +83,7 @@ class DispatchOutcomeV176(unittest.TestCase):
         session=Mock();session.get.return_value=NS(vk_id=22)
         parallel=types.ModuleType('v173_runtime.parallel_orders')
         parallel.route_priority_city=lambda o:'Кусья'
+        parallel.local_village_line=lambda o:None # this fixture is not a local trip
         parallel.notify_busy_drivers=lambda *a:False
         def fallback(*a,**kw):order.offered_driver_id=3;order.status='searching'
         parallel._fallback_to_free_drivers=fallback
@@ -104,7 +105,11 @@ class DispatchOutcomeV176(unittest.TestCase):
                'normalize_driver_chat_peer_id':lambda value:value,'send_fallback_chat_tracked_notice':Mock(return_value=77),
                'order_text':lambda o:'Доставка пакета','vk':Mock(),'kb':Mock(),'timers':Mock(),
                'CHAT_UNCLAIMED_TIMEOUT_SECONDS':2700,'_driver_chat_timeout':Mock()}
-        load('bot/order_service.py','_handle_no_driver',scope)(session,order)
+        scope['__package__']='v173_runtime'
+        parallel=types.ModuleType('v173_runtime.parallel_orders')
+        parallel.local_village_line=lambda o:None # regular delivery, not local
+        with relative_modules(parallel_orders=parallel):
+            load('bot/order_service.py','_handle_no_driver',scope)(session,order)
         self.assertEqual([c.args[1] for c in scope['vk'].send_message.call_args_list],
                          ['Заявка отправлена в чат заявок. Ожидаем, когда водитель возьмёт её.'])
         self.assertEqual(order.status,'chat_search')

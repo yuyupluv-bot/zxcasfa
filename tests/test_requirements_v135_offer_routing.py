@@ -9,7 +9,8 @@ class V135(unittest.TestCase):
     def test_special_requests_use_first_offer_and_chat_fallback(self):
         source = (ROOT / "bot/order_service.py").read_text(encoding="utf-8")
         self.assertIn("30\n        if order.customer_price", source)
-        self.assertIn("if order.customer_price is not None or order.dispatcher_id", source)
+        self.assertIn("order.customer_price is not None or order.dispatcher_id", source)
+        self.assertIn("not parallel_orders.local_village_line(order)", source)
         self.assertIn("publish_direct_to_requests_chat(session, order)", source)
         self.assertIn("f\"@all\\n🔔 Заявка №{order.number}\\n\"", source)
 

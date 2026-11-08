@@ -89,7 +89,7 @@ class RequestedFixesV115(unittest.TestCase):
     def test_07_gorno_gets_count_only_notice(self):
         refresh = function_source(self.parallel, "refresh_gornozavodsk_parallel_notices")
         self.assertIn("Есть параллельные заявки:", refresh)
-        self.assertIn("_russian_request_word(count)", refresh)
+        self.assertIn("_russian_request_word(driver_count)", refresh)
         self.assertIn("route_priority_city(row) is None", refresh)
         self.assertIn("_is_gornozavodsk_trip(current)", refresh)
         self.assertNotIn("route_parallel_offer_keyboard", refresh)

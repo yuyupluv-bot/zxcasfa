@@ -56,6 +56,9 @@ def assign_from_admin(session: Session, order_id: int, driver_id: int) -> bool:
     ):
         return False
 
+    from . import parallel_orders
+    if not parallel_orders.local_line_allows(order, driver):
+        return False
     queue_row = (
         session.query(DriverQueue)
         .filter(DriverQueue.driver_id == driver.id)

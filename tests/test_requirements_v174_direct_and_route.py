@@ -114,7 +114,9 @@ class PersonalOfferV174(unittest.TestCase):
                'passenger_rating_text':lambda u:'5.0','_extras_summary':lambda *a:'',
                'is_delivery_type':lambda o:False,'kb':Mock(),'set_state':Mock(),
                'States':NS(D_OFFER='offer'),'get_int':lambda *a:60,'timers':Mock(), '_accept_timeout':Mock()}
-        with relative_modules(passenger_queue=pq,push_service=push):
+        parallel=types.ModuleType('v173_runtime.parallel_orders')
+        parallel.local_line_allows=lambda order,driver: True # this fixture is non-local
+        with relative_modules(passenger_queue=pq,push_service=push,parallel_orders=parallel):
             result=load('bot/order_service.py','offer_to_selected_driver',scope)(session,order,driver)
         return result,order,entry,session,vk,scope
 

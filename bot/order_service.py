@@ -523,6 +523,9 @@ def offer_to_selected_driver(session: Session, order: Order, driver: User) -> bo
                     order.id, driver.id, selection_live, entry.status if entry else None, driver.driver_status)
         return False
     order = locked_order
+    from . import parallel_orders
+    if not parallel_orders.local_line_allows(order, driver):
+        return False
     entry.status = "offered"
     order.status = "searching"
     _set_current_offer(session, order, driver.id)
@@ -627,7 +630,9 @@ def offer_to_next_driver(
     from . import parallel_orders
     pickup_line = parallel_orders.free_line_city(order) or "Горнозаводск"
     route_city = parallel_orders.route_priority_city(order)
-    if route_city and line_name is None and line_scope == "normal":
+    if parallel_orders.local_village_line(order):
+        line_name, line_scope = route_city, "exact"
+    elif route_city and line_name is None and line_scope == "normal":
         # Village requests have a strict staged route.  Gornozavodsk is not
         # eligible until the automatic route-parallel stage is declined,
         # expires, or has no eligible recipient.
@@ -838,7 +843,8 @@ def _accept_timeout(order_id: int, driver_id: int) -> None:
         # Passenger-priced and dispatcher-created orders get one ordinary
         # offer first. Only after the driver ignores it do they become a
         # shared-chat request addressed to all drivers.
-        if order.customer_price is not None or order.dispatcher_id:
+        from . import parallel_orders
+        if (order.customer_price is not None or order.dispatcher_id) and not parallel_orders.local_village_line(order):
             order.status = "created"
             session.flush()
             publish_direct_to_requests_chat(session, order)
@@ -1114,7 +1120,8 @@ def _handle_no_driver(session: Session, order: Order) -> None:
     # publish it to the separate requests chat. A driver can choose the «Доставка»
     # decline reason even for an order whose stored type is still regular, so
     # inspect both the order type and collected decline reasons.
-    fallback_to_chat = (
+    from . import parallel_orders
+    fallback_to_chat = not parallel_orders.local_village_line(order) and (
         is_delivery_type(order)
         or "delivery" in reasons
         or "far" in reasons
@@ -1174,12 +1181,12 @@ def _handle_no_driver(session: Session, order: Order) -> None:
                 keyboard=kb.passenger_waiting_keyboard(order.id),
             )
             return
-    if is_delivery_type(order):
+    if is_delivery_type(order) and not parallel_orders.local_village_line(order):
         if creator:
             vk.send_message(creator.vk_id, msg(session, "msg_delivery_no_drivers"), keyboard=kb.passenger_menu())
             reset(session, creator.vk_id, States.MAIN_MENU)
         return
-    if "far" in reasons:
+    if "far" in reasons and not parallel_orders.local_village_line(order):
         if creator:
             vk.send_message(creator.vk_id, "\U0001F614 Нет водителей для дальних расстояний. Попробуйте позже.", keyboard=kb.passenger_menu())
             reset(session, creator.vk_id, States.MAIN_MENU)

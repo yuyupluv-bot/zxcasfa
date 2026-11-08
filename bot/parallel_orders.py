@@ -68,10 +68,10 @@ def _route_dash_parts(text: str | None) -> tuple[str | None, str | None]:
 
 def is_route_fallback(order: Order) -> bool:
     """Whether the village request has permanently entered its Gorno stage."""
-    return bool(
+    return bool(not local_village_line(order) and (
         order.parallel_route_fallback
         or order.last_decline_reason == ROUTE_FALLBACK_REASON
-    )
+    ))
 
 
 def _json_id_set(raw: str | None) -> set[int]:
@@ -147,10 +147,28 @@ def _city_before_to_separator(text: str | None) -> str | None:
     return _route_city_in(value[:separator.start()])
 
 
-def route_priority_city(order: Order) -> str | None:
-    """Recognize explicit origin, village before «до», or first-two pickup."""
+def route_priority_city(order: Order, *, local_only: bool = False) -> str | None:
+    """Detect explicit local village wording, then preserve origin routing."""
+    for field in ("route_text", "address_from", "address_to", "comment"):
+        text = getattr(order, field, None) or ""
+        match = re.search(r"\bпо\s+(паши(?:я|и|ю|е|ей)|кусь(?:я|и|ю|е|ей))\b", text, re.I)
+        if match:
+            return "Пашия" if match.group(1).casefold().startswith("паш") else "Кусья"
+    if local_only:
+        return None
     text = order.route_text or order.address_from
     return _origin_city(text) or _city_before_to_separator(text) or _city_first_two(text)
+
+
+def local_village_line(order: Order) -> str | None:
+    """Recognize only explicit «по Пашии/Кусье», in any order field."""
+    return route_priority_city(order, local_only=True)
+
+
+def local_line_allows(order: Order, driver: User | None) -> bool:
+    city = local_village_line(order)
+    return not city or bool(driver and driver.is_on_line and
+        (driver.current_line or "").strip().casefold() == city.casefold())
 
 
 def free_line_city(order: Order) -> str | None:
@@ -274,7 +292,9 @@ def _parallel_candidate_filter(query):
 
 def has_available_for_current(session: Session, current: Order) -> bool:
     """Whether the active driver's menu should show a green parallel indicator."""
-    return bool(_destination_restricted_orders(current, available(session)))
+    driver = session.get(User, current.driver_id) if current.driver_id else None
+    return any(local_line_allows(row, driver) for row in
+               _destination_restricted_orders(current, available(session)))
 
 
 def has_eligible_busy_driver_for_order(session: Session, order: Order) -> bool:
@@ -306,6 +326,7 @@ def has_eligible_busy_driver_for_order(session: Session, order: Order) -> bool:
         and current.driver_id not in offered_driver_ids
         and current.driver_id not in excluded_driver_ids
         and not current.parallel_auto_offers_disabled
+        and local_line_allows(order, session.get(User, current.driver_id))
         for current in current_orders
     )
 
@@ -484,24 +505,32 @@ def refresh_gornozavodsk_parallel_notices(
     # Rolling-deployment cleanup: v116 stored these alerts on arbitrary order
     # rows. Move to one durable reference on User, exactly like away notices.
     _remove_legacy_gorno_aggregate_refs(session)
-    local_orders = [
-        row for row in available(session)
-        if route_priority_city(row) is None
-    ]
-    count = len(local_orders)
-    text = f"Есть параллельные заявки: {count} {_russian_request_word(count)}"
+    candidates = available(session)
+    count = sum(1 for row in candidates if route_priority_city(row) is None)
     current_orders = session.query(Order).filter(
         Order.status.in_(ACTIVE),
         Order.driver_id.isnot(None),
     ).all()
     eligible_driver_ids: set[int] = set()
+    counts: dict[int, int] = {}
     for current in current_orders:
         driver_id = int(current.driver_id or 0)
-        if (
-            not driver_id
-            or driver_id in excluded
-            or not _is_gornozavodsk_trip(current)
-        ):
+        if not driver_id or driver_id in excluded:
+            continue
+        route = current.route_text or ""
+        address_from = current.address_from or ""
+        origin = (_origin_city(route) or _city_before_to_separator(route)
+                  or _origin_city(address_from) or _city_first_two(address_from)
+                  or _city_first_two(route))
+        if origin in ("Пашия", "Кусья"):
+            driver = session.get(User, driver_id)
+            # Match the driver's actual parallel list, including line restrictions.
+            counts[driver_id] = sum(1 for candidate in
+                _destination_restricted_orders(current, candidates)
+                if local_line_allows(candidate, driver))
+        elif _is_gornozavodsk_trip(current):
+            counts[driver_id] = count
+        else:
             continue
         eligible_driver_ids.add(driver_id)
 
@@ -515,12 +544,13 @@ def refresh_gornozavodsk_parallel_notices(
     notified = 0
     for driver in drivers:
         before = int(driver.parallel_notice_outbox_id or 0)
+        driver_count = counts.get(driver.id, 0)
         _sync_parallel_notice(
             session,
             driver,
-            count,
+            driver_count,
             eligible=driver.id in eligible_driver_ids,
-            text=text,
+            text=f"Есть параллельные заявки: {driver_count} {_russian_request_word(driver_count)}",
         )
         if driver.parallel_notice_outbox_id and int(driver.parallel_notice_outbox_id) != before:
             notified += 1
@@ -604,6 +634,8 @@ def _auto_offer_trip_is_eligible(
         or current.parallel_auto_offers_disabled
         or driver_id in excluded_driver_ids
     ):
+        return False
+    if not local_line_allows(order, session.get(User, driver_id)):
         return False
     route = current.route_text or current.address_to
     origin = _origin_city(route) or _city_before_to_separator(route) or _city_first_two(route)
@@ -805,7 +837,8 @@ def show(session: Session, driver: User, current: Order, page=1) -> None:
             keyboard=kb.parallel_reserved_keyboard(reserved.id),
             attachment=vk.prepare_voice_attachment(driver.vk_id, reserved.voice_attachment),
         )
-    rows = _destination_restricted_orders(current, available(session))
+    rows = [row for row in _destination_restricted_orders(current, available(session))
+            if local_line_allows(row, driver)]
     if not rows:
         from .handlers import _driver_ride_kb
         return vk.send_message(driver.vk_id, "Свободных параллельных заявок пока нет.",
@@ -873,6 +906,8 @@ def take(
             "Эта заявка уже отменена или её взял другой водитель."
         )
         return vk.send_message(driver.vk_id, message)
+    if not local_line_allows(order, driver):
+        return vk.send_message(driver.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
     if require_live_offer and (
         order.parallel_offer_driver_id != driver.id
         or order.parallel_offer_trip_id != current.id
@@ -1267,6 +1302,11 @@ def _fallback_to_free_drivers(
         )
         return
 
+    # Local village rides must remain in their own line, even after timeout.
+    if local_village_line(order):
+        order.parallel_route_fallback = False
+        refresh_busy_driver_menus(session, exclude_driver_ids={driver.id} if driver else None)
+        return
     order.parallel_route_fallback = True
     # This is a system routing transition, not a refusal by a driver.  Keep
     # its durable flag separate from the user-facing refusal history.  Clear
