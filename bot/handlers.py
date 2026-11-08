@@ -478,6 +478,14 @@ def _handle_message_impl(session: Session, event) -> None:
     if vk_id < 0:  # ignore messages from groups/communities
         return
 
+    # Price questions are observed independently of normal conversation state.
+    try:
+        from . import common_chat_notices
+        with session.begin_nested():
+            common_chat_notices.notify_price_question(session, message)
+    except Exception:  # noqa: BLE001
+        log.exception("Price-question notice processing failed")
+
     # A notice failure must not break normal message processing.
     if int(message.get("peer_id") or 0) >= 2_000_000_000:
         try:

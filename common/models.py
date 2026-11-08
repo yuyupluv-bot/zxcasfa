@@ -647,6 +647,8 @@ class CommonChatNotice(Base):
     peer_id = Column(BigInteger, nullable=False)
     conversation_message_id = Column(BigInteger, nullable=False)
     vk_message_id = Column(BigInteger)
+    author_vk_id = Column(BigInteger, nullable=True, index=True)
+    seen_in_vk = Column(Boolean, nullable=False, default=False, server_default="false")
     outbox_ids = Column(Text, nullable=False, default="[]")
     answered = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False)

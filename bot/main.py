@@ -240,6 +240,8 @@ def run() -> None:
     maintenance_service.start_worker()
     temporary_driver_service.start_worker()
     rotating_posts_service.start_worker()
+    from bot import common_chat_notices
+    common_chat_notices.start_worker()
     log.info("Taxi bot started. Listening for events…")
     print("STARTUP BOT OK: listening for VK events", flush=True)
     from bot import driver_app_commands

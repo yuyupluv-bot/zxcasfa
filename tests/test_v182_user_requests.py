@@ -128,7 +128,7 @@ def test_chat_notifications_roles_multiple_messages_and_reply(db):
         row=OutboxMessage(peer_id=peer_id,text=text,random_id=next(seq),status='pending')
         db.add(row);db.flush();return row.id
     def message(sender, cmid, **extras):
-        return dict(peer_id=peer,from_id=sender,conversation_message_id=cmid,id=cmid+1000,text='текст',**extras)
+        return dict(peer_id=peer,from_id=sender,conversation_message_id=cmid,id=cmid+1000,text='Нужно такси',**extras)
     with patch.object(chat,'get_int',return_value=peer), patch.object(chat.vk,'send_tracked_message',side_effect=send):
         chat.handle_message(db,message(99,1))
         chat.handle_message(db,message(98,2))
