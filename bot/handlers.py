@@ -2496,6 +2496,20 @@ def _passenger_within_grace(session: Session, order: Order) -> bool:
     grace = get_int(session, "passenger_cancel_grace_seconds", 120)
     return (time_utils.now() - departed).total_seconds() <= grace
 
+
+def _parallel_cancellation_is_chargeable(order: Order) -> bool:
+    """A parallel reservation is free only before promotion and within 120s."""
+    taken = getattr(order, "parallel_accepted_at", None)
+    if taken is None:
+        # Old reservations did not store their take time: never invent debt.
+        return False
+    if order.status != "parallel_assigned":
+        return True
+    if taken.tzinfo is None:
+        taken = taken.replace(tzinfo=dt.timezone.utc)
+    return (time_utils.now() - taken).total_seconds() > 120
+
+
 def passenger_cancel_request(session: Session, user: User, order_id=None) -> None:
     """Warn before a cancellation that will create a false-call debt."""
     order = passenger_order_for(session, user, order_id)
@@ -2506,6 +2520,12 @@ def passenger_cancel_request(session: Session, user: User, order_id=None) -> Non
             user.vk_id,
             "После посадки отменить заявку нельзя.",
             keyboard=kb.passenger_in_ride_keyboard(order.id),
+        )
+    if not _is_dispatcher_order(order) and _parallel_cancellation_is_chargeable(order):
+        return vk.send_message(
+            user.vk_id,
+            "⚠️ При отмене параллельной заявки будет создан ложный вызов. Подтвердить отмену?",
+            keyboard=kb.passenger_cancel_confirm_keyboard(order.id),
         )
     if (order.driver_id and not order.parallel_driver_id
             and not _is_dispatcher_order(order)
@@ -2597,15 +2617,30 @@ def passenger_cancel(session: Session, user: User, order_id=None) -> None:
     active = passenger_order_for(session, user, order_id)
     if not active:
         return show_main_menu(session, user)
-    order = session.query(Order).filter(Order.id == active.id).with_for_update().one()
+    session.flush()
+    order = (session.query(Order).filter(Order.id == active.id)
+             .with_for_update().populate_existing().one())
+    # Re-check after the lock: the passenger's order may have completed while
+    # waiting for a concurrent promotion or cancellation.
+    if order.status not in ("created", "queued", "searching", "chat_search", "price_negotiation", "parallel_assigned", "assigned", "arrived", "in_progress"):
+        return show_main_menu(session, user)
     if order.status == "in_progress":
         return vk.send_message(
             user.vk_id,
             "После посадки отменить заявку нельзя.",
             keyboard=kb.passenger_in_ride_keyboard(order.id),
         )
+    parallel_charge = bool(
+        not _is_dispatcher_order(order) and _parallel_cancellation_is_chargeable(order)
+    )
     if getattr(order, "enroute_notice_outbox_id", None):
         order_service.clear_enroute_notice(session, order)
+    from . import outbox_service
+    for prompt_field in ("departure_prompt_outbox_id", "chat_actuality_prompt_outbox_id"):
+        prompt_id = getattr(order, prompt_field, None)
+        if prompt_id:
+            outbox_service.cancel_or_delete(session, prompt_id)
+            setattr(order, prompt_field, None)
     chat_reason = order_service.driver_chat_reason_label(session, order) if order.status == "chat_search" else None
     order.status = "cancelled"
     order.cancelled_at = time_utils.now()
@@ -2642,15 +2677,21 @@ def passenger_cancel(session: Session, user: User, order_id=None) -> None:
     # to that ride instead of changing their queue position.
     if order.parallel_driver_id:
         driver = session.get(User, order.parallel_driver_id)
+        if getattr(order, "offer_outbox_id", None):
+            order_service.finalize_offer_message(session, order, "❌ Пассажир отменил заявку.")
         order.parallel_driver_id = None
         order.driver_id = None  # repair rows created by older releases
         if driver:
             from . import push_service
             push_service.send(session, driver.id, "cancelled", order)
+            if parallel_charge:
+                fake_calls_service.create(session, order, driver)
+                fake_call_created = True
             vk.send_message(
                 driver.vk_id,
                 f"Пассажир отменил параллельную заявку #{order.number}. "
-                "Текущая поездка продолжается.",
+                + ("Создан ложный вызов. " if parallel_charge else "")
+                + "Текущая поездка продолжается.",
             )
             current = (
                 session.query(Order)
@@ -2669,13 +2710,14 @@ def passenger_cancel(session: Session, user: User, order_id=None) -> None:
                 queue_service.restore_position(session, driver)
                 reset(session, driver.vk_id, States.D_MENU)
                 show_main_menu(session, driver)
-        _continue_after_passenger_order_closed(session, user, order.id, order.number)
+        if not fake_call_created:
+            _continue_after_passenger_order_closed(session, user, order.id, order.number)
         passenger_queue.try_promote(session)
         return
     if order.driver_id:
         driver = session.get(User, order.driver_id)
         accepted = order.driver_accept_time is not None
-        past_grace = accepted and not _passenger_within_grace(session, order)
+        past_grace = parallel_charge or (accepted and not _passenger_within_grace(session, order))
         from . import parallel_orders
         has_parallel = bool(driver and parallel_orders.has_pending(session, driver))
         if driver:
@@ -2789,16 +2831,18 @@ def passenger_departure_response(
     # confirmation cannot create an "on the way" notice after arrival.
     session.flush()
     session.refresh(order, with_for_update=True)
-    if order.status not in ("assigned", "arrived", "in_progress"):
+    if order.status not in ("assigned", "arrived", "in_progress", "parallel_assigned"):
         return show_main_menu(session, user)
     if cancel and order.status == "in_progress":
         return passenger_cancel(session, user, order.id)
-    driver = session.get(User, order.driver_id) if order.driver_id else None
+    parallel = order.status == "parallel_assigned" or bool(getattr(order, "parallel_accepted_at", None))
+    driver_id = order.parallel_driver_id if order.status == "parallel_assigned" else order.driver_id
+    driver = session.get(User, driver_id) if driver_id else None
     prompt_id = order.departure_prompt_outbox_id
     if not prompt_id:
         return  # Duplicate/stale callback must not notify or cancel again.
     if driver and not cancel:
-        vk.send_message(driver.vk_id, "Клиент ожидает вас на месте")
+        vk.send_message(driver.vk_id, "Клиент по параллельной заявке, ожидает на месте" if parallel else "Клиент ожидает вас на месте")
     if prompt_id:
         from . import outbox_service
         prompt = session.get(OutboxMessage, prompt_id)
@@ -2820,7 +2864,7 @@ def passenger_departure_response(
     order.departure_prompt_outbox_id = None
     if cancel:
         return passenger_cancel(session, user, order.id)
-    if order.status == "assigned":
+    if order.status in ("assigned", "parallel_assigned"):
         # Persist the exact message id; arrival will delete this message only.
         order.enroute_notice_outbox_id = vk.send_tracked_message(user.vk_id, "Машинка в пути")
     order.actuality_confirmed = True
@@ -3470,6 +3514,8 @@ def handle_driver(session, user, state, text, payload, attachments):
         return driver_cancel_active(session, user, "no_show")
     if cmd == "driver_cancel_customer":
         return driver_cancel_active(session, user, "customer_cancel")
+    if cmd == "driver_cancel_no_false_call":
+        return driver_cancel_active(session, user, "no_false_call")
     if cmd == "driver_cancel_car":
         return driver_cancel_active(session, user, "car")
     if cmd == "chat_take":
@@ -4135,6 +4181,7 @@ def request_claim_actuality(
         return False
     text = (
         "У нас есть водитель, который сейчас довозит клиентов и затем выезжает к вам. "
+        "При отмене после перехода водителя к заявке или спустя 2 минуты после её принятия будет ложный вызов. "
         "Вы ждёте машинку?"
         if parallel else
         "Появился водитель, который может взять вашу заявку. Она ещё актуальна?"
@@ -7491,7 +7538,7 @@ def driver_cancel_active(session: Session, user: User, reason: str) -> None:
     ):
         return show_main_menu(session, user)
     reason = (reason or "").strip().casefold()
-    if reason not in ("no_show", "customer_cancel", "car"):
+    if reason not in ("no_show", "customer_cancel", "car", "no_false_call"):
         log.error(
             "Unknown active-order cancel reason: driver=%s order=%s reason=%r",
             user.id,
@@ -7505,20 +7552,55 @@ def driver_cancel_active(session: Session, user: User, reason: str) -> None:
         )
     if getattr(order, "enroute_notice_outbox_id", None):
         order_service.clear_enroute_notice(session, order)
+    from . import outbox_service
+    for prompt_field in ("departure_prompt_outbox_id", "chat_actuality_prompt_outbox_id"):
+        prompt_id = getattr(order, prompt_field, None)
+        if prompt_id:
+            outbox_service.cancel_or_delete(session, prompt_id)
+            setattr(order, prompt_field, None)
     timers.cancel_all_for_order(order.id)
     from . import parallel_orders
     # Any automatic parallel card was valid only while this exact trip was
     # active. Close it now instead of waiting for its 60-second callback.
     parallel_orders.release_route_offers_for_trip(session, order)
     passenger = session.get(User, order.passenger_id)
+    if reason == "no_false_call":
+        order.status = "cancelled"
+        order.cancelled_at = time_utils.now()
+        order.cancelled_by = "driver"
+        booking_service.cancel_for_order(session, order.id, canceled_by="driver")
+        if passenger:
+            vk.send_message(passenger.vk_id, "Водитель отменил заявку, ложного вызова не будет.")
+            if not _is_dispatcher_order(order):
+                _continue_after_passenger_order_closed(session, passenger, order.id, order.number)
+        has_parallel = parallel_orders.has_pending(session, user)
+        _leave_temporary_chat_line(session, user, order)
+        restored = False
+        if not has_parallel:
+            restored = queue_service.move_to_front(session, user) is not None
+            if not restored:
+                queue_service.set_away(session, user)
+        reset(session, user.vk_id, States.D_MENU)
+        vk.send_message(
+            user.vk_id, f"✅ Заявка #{order.number} отменена без ложного вызова.",
+            keyboard=kb.driver_menu(on_line=True, show_role_switch=can_switch_role(user)) if restored else None,
+        )
+        audit.record(session, "driver_cancel_no_false_call", f"order={order.id} driver={user.id}")
+        if has_parallel:
+            parallel_orders.promote_after_current(session, user)
+        else:
+            passenger_queue.try_promote(session)
+            if not restored:
+                lines.ask_post_ride_line(session, user)
+        return
     if reason == "customer_cancel":
         # The two-minute window starts only after the driver has supplied ETA:
         # _apply_eta records that moment in driver_departed_at.  Reuse the
         # passenger cancellation setting so both cancellation paths share the
         # exact same strict boundary (> grace creates a false call; <= does not).
         past_grace = bool(
-            order.driver_departed_at
-            and not _passenger_within_grace(session, order)
+            _parallel_cancellation_is_chargeable(order)
+            or (order.driver_departed_at and not _passenger_within_grace(session, order))
         )
         order.status = "cancelled"
         order.cancelled_at = time_utils.now()
@@ -7562,7 +7644,10 @@ def driver_cancel_active(session: Session, user: User, reason: str) -> None:
         if _is_dispatcher_order(order):
             result_text += " Диспетчерской заявке ложный вызов не начисляется."
         elif fake_call_created:
-            result_text += " Прошло более 2 минут после указания времени прибытия — ложный вызов создан."
+            if getattr(order, "parallel_accepted_at", None):
+                result_text += " По параллельной заявке после перехода создан ложный вызов."
+            else:
+                result_text += " Прошло более 2 минут после указания времени прибытия — ложный вызов создан."
         else:
             result_text += " Прошло не более 2 минут после указания времени прибытия — ложный вызов не создан."
         if restored_to_front:
@@ -7657,6 +7742,7 @@ def driver_cancel_active(session: Session, user: User, reason: str) -> None:
             lines.ask_post_ride_line(session, user)
             return
         order.driver_id = None; order.status = "searching"
+        order.parallel_accepted_at = None
         queue_service.set_away(session, user)
         if passenger and _is_dispatcher_order(order):
             vk.send_message(
@@ -7839,6 +7925,8 @@ def passenger_chat_order_actual(session: Session, user: User, order_id, actual: 
     order = session.query(Order).filter(Order.id == int(order_id)).with_for_update().one_or_none() if order_id else None
     if not order or order.passenger_id != user.id or order.status not in ("assigned", "parallel_assigned"):
         return vk.send_message(user.vk_id, "Эта заявка уже недоступна.")
+    if not order.chat_actuality_prompt_outbox_id:
+        return
     timers.cancel("chat_actual", order.id)
     if order.chat_actuality_prompt_outbox_id:
         from . import outbox_service
@@ -7848,8 +7936,11 @@ def passenger_chat_order_actual(session: Session, user: User, order_id, actual: 
             "✅ Вы ответили: заявка актуальна." if actual else "❌ Вы ответили: заявка неактуальна.",
         )
         order.chat_actuality_prompt_outbox_id = None
+    parallel_confirmation = bool(getattr(order, "parallel_accepted_at", None)) or order.status == "parallel_assigned"
     driver_id = order.parallel_driver_id if order.status == "parallel_assigned" else order.driver_id
     driver = session.get(User, driver_id) if driver_id else None
+    if not actual and parallel_confirmation:
+        return passenger_cancel(session, user, order.id)
     if not actual:
         order.status = "cancelled"
         order.cancelled_at = time_utils.now()
@@ -7899,19 +7990,23 @@ def passenger_chat_order_actual(session: Session, user: User, order_id, actual: 
         passenger_queue.try_promote(session)
         return
     if driver:
-        if order.parallel_driver_id == driver.id:
+        if parallel_confirmation:
             order.actuality_confirmed = True
             vk.send_message(
                 driver.vk_id,
-                "Клиент по параллельной заявке подтвердил: «Да, жду». Клиент ждёт вас.",
+                "Клиент по параллельной заявке, ожидает на месте",
             )
+            if not getattr(order, "enroute_notice_outbox_id", None):
+                order.enroute_notice_outbox_id = vk.send_tracked_message(user.vk_id, "Машинка в пути")
             vk.send_message(
                 user.vk_id,
                 "Спасибо! Водитель получил подтверждение и укажет время прибытия.",
                 keyboard=kb.passenger_waiting_keyboard(order.id),
             )
             set_state(session, user.vk_id, States.P_WAITING, {"order_id": order.id}, merge=False)
-            return parallel_orders.prompt_eta_after_actuality(session, driver, order)
+            if order.status == "parallel_assigned":
+                return parallel_orders.prompt_eta_after_actuality(session, driver, order)
+            return driver_show_eta_menu(session, driver)
         if delivery_service.is_delivery(order):
             vk.send_message(user.vk_id, "Водитель рассчитывает стоимость доставки.")
             return delivery_service.request_price(session, driver, order)
@@ -7936,11 +8031,12 @@ def chat_actuality_timeout(order_id: int) -> None:
         from . import outbox_service
         outbox_service.cancel_or_delete(session, order.chat_actuality_prompt_outbox_id)
         order.chat_actuality_prompt_outbox_id = None
+        was_parallel = order.status == "parallel_assigned"
         order.status = "cancelled"
         order.cancelled_at = time_utils.now()
         order.cancelled_by = "system"
         passenger = session.get(User, order.passenger_id)
-        driver_id = order.parallel_driver_id if order.status == "parallel_assigned" else order.driver_id
+        driver_id = order.parallel_driver_id if was_parallel else order.driver_id
         driver = session.get(User, driver_id) if driver_id else None
         if passenger:
             vk.send_message(

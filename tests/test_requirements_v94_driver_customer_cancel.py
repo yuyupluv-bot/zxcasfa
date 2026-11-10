@@ -37,7 +37,7 @@ class DriverCustomerRequestedCancellationV94(unittest.TestCase):
             'if cmd == "driver_cancel_customer":\n        return driver_cancel_active(session, user, "customer_cancel")',
             self.handlers,
         )
-        self.assertIn('reason not in ("no_show", "customer_cancel", "car")', self.cancel)
+        self.assertIn('reason not in ("no_show", "customer_cancel", "car", "no_false_call")', self.cancel)
 
     def test_03_two_minutes_start_after_eta(self):
         branch = self.cancel.split('if reason == "customer_cancel":', 1)[1].split('if reason == "no_show":', 1)[0]

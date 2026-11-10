@@ -305,6 +305,8 @@ class Order(Base):
     # A busy driver may reserve one waiting order and start it immediately
     # after the current ride is completed.
     parallel_driver_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    # Start of this specific parallel reservation; retained through promotion.
+    parallel_accepted_at = Column(DateTime(timezone=True), nullable=True)
     parallel_eta = Column(Integer, nullable=True)
     parallel_eta_set_at = Column(DateTime(timezone=True), nullable=True)
     # Drivers who were shown this order as a parallel option. Used to notify

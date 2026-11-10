@@ -932,6 +932,7 @@ def take(
         )
     timers.cancel("route_parallel_offer", order.id)
     order.parallel_driver_id = driver.id
+    order.parallel_accepted_at = time_utils.now()
     # A reserved next request is not the driver's current ride yet.  Keeping
     # driver_id empty prevents active-order lookups, completion and
     # cancellation code from confusing it with the trip being performed now.
@@ -948,8 +949,18 @@ def take(
     from .handlers import request_claim_actuality
     if request_claim_actuality(session, driver, order, parallel=True):
         return
-    timers.schedule("parallel_eta", order.id, 120, lambda: _eta_timeout(order.id))
     passenger = session.get(User, order.passenger_id)
+    if passenger and not order.dispatcher_id:
+        # Ask even for a newly created parallel request, without blocking the
+        # driver's choice of ETA or affecting the ongoing ride.
+        order.departure_prompt_outbox_id = vk.send_tracked_message(
+            passenger.vk_id,
+            "Водитель завершает текущую поездку и затем поедет к вам.\n"
+            "⚠️ При отмене после перехода водителя к заявке или спустя 2 минуты "
+            "после её принятия будет ложный вызов.\nВы ждёте машинку?",
+            keyboard=kb.passenger_departure_keyboard(order.id),
+        )
+    timers.schedule("parallel_eta", order.id, 120, lambda: _eta_timeout(order.id))
     route = order.route_text or f"{order.address_from} — {order.address_to}"
     passenger_label = (
         f"[id{passenger.vk_id}|{passenger.full_name or ('id' + str(passenger.vk_id))}]"
@@ -1112,6 +1123,20 @@ def _restore_active_menu_after_parallel_decline(
     )
 
 
+
+def _clear_reserved_passenger_notices(session: Session, order: Order) -> None:
+    """Retire prompts tied to a driver who released this reservation."""
+    from . import outbox_service, order_service
+    for field in ("departure_prompt_outbox_id", "chat_actuality_prompt_outbox_id"):
+        outbox_id = getattr(order, field, None)
+        if outbox_id:
+            outbox_service.cancel_or_delete(session, outbox_id)
+            setattr(order, field, None)
+    if getattr(order, "enroute_notice_outbox_id", None):
+        order_service.clear_enroute_notice(session, order)
+    timers.cancel("chat_actual", order.id)
+
+
 def decline(session: Session, driver: User, order_id: int) -> None:
     order = session.get(Order, int(order_id or 0))
     if not order or order.parallel_driver_id != driver.id or order.status != "parallel_assigned":
@@ -1127,7 +1152,9 @@ def decline(session: Session, driver: User, order_id: int) -> None:
         Order.status.in_(ACTIVE),
     ).first()
     if city and current and _destination_city(current.route_text or current.address_to) == city:
+        _clear_reserved_passenger_notices(session, order)
         order.parallel_driver_id = None
+        order.parallel_accepted_at = None
         order.driver_id = None
         order.parallel_eta = None
         order.parallel_eta_set_at = None
@@ -1274,6 +1301,7 @@ def _fallback_to_free_drivers(
     else:
         _remove_notifications(session, order)
     order.parallel_driver_id = None
+    order.parallel_accepted_at = None
     order.driver_id = None
     order.parallel_eta = None
     order.parallel_eta_set_at = None
@@ -1505,7 +1533,9 @@ def reconcile_route_offers() -> int:
 def _release(session: Session, order: Order, driver: User | None, passenger_text: str) -> None:
     from . import passenger_queue
 
+    _clear_reserved_passenger_notices(session, order)
     order.parallel_driver_id = None
+    order.parallel_accepted_at = None
     order.parallel_eta = None
     order.parallel_eta_set_at = None
     order.driver_id = None
@@ -1601,6 +1631,10 @@ def promote_after_current(session: Session, driver: User) -> Order | None:
     order.status = "assigned"
     order.driver_id = driver.id
     order.parallel_driver_id = None
+    # Older reservations lack a recorded acceptance time. Promotion itself
+    # is known and makes a later passenger cancellation chargeable.
+    if not getattr(order, "parallel_accepted_at", None):
+        order.parallel_accepted_at = time_utils.now()
     order.arrival_eta = remaining
     order.parallel_eta = None
     order.parallel_eta_set_at = None

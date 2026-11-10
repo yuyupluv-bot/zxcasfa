@@ -42,6 +42,6 @@ class RemoveTelegramForkV57Tests(unittest.TestCase):
                 revisions[vals["revision"]]=path.name
                 if vals.get("down_revision"): parents.add(vals["down_revision"])
         self.assertTrue(parents.issubset(revisions))
-        self.assertEqual({"0056_enroute_notice"}, set(revisions)-parents)
+        self.assertEqual({"0057_parallel_accept_time"}, set(revisions)-parents)
 
 if __name__=="__main__": unittest.main()

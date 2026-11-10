@@ -1122,6 +1122,7 @@ def driver_active_cancel_keyboard() -> str:
     return keyboard([
         [_btn("Клиент не вышел", RED, {"cmd":"driver_cancel_no_show"})],
         [_btn("Клиент захотел отменить", RED, {"cmd":"driver_cancel_customer"})],
+        [_btn("Без ложного вызова", BLUE, {"cmd":"driver_cancel_no_false_call"})],
         [_btn("Неполадка с авто", RED, {"cmd":"driver_cancel_car"})],
         [_btn("Вернуться к поездке", WHITE, {"cmd":"driver_cancel_back"})],
     ])

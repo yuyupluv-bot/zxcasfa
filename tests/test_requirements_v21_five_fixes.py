@@ -21,7 +21,7 @@ class FiveFixesV21Tests(unittest.TestCase):
         self.assertIn("клиент не вышел", no_show)
         self.assertIn("return", no_show)
         self.assertNotIn("неполадка с авто", no_show)
-        self.assertIn('reason not in ("no_show", "customer_cancel", "car")', fn)
+        self.assertIn('reason not in ("no_show", "customer_cancel", "car", "no_false_call")', fn)
 
     def test_unanswered_driver_card_is_preserved_on_arrival(self):
         source = ORDER_SERVICE.read_text("utf-8")
