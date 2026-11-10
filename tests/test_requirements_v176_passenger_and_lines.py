@@ -270,9 +270,8 @@ class EtaAndMenuV176(unittest.TestCase):
 
     def test_yes_removes_only_question_no_ack_and_confirms(self):
         order,session,outbox,scope=self.response()
-        outbox.cancel_or_delete.assert_not_called()
-        self.assertEqual(outbox.finalize_tracked_message.call_args.args[2], 'Машинка в пути')
-        self.assertTrue(outbox.finalize_tracked_message.call_args.kwargs['defer_edit'])
+        outbox.cancel_or_delete.assert_called_once_with(session,99)
+        scope['vk'].send_tracked_message.assert_called_once_with(22, 'Машинка в пути')
         scope['vk'].send_message.assert_called_once_with(11,'Клиент ожидает вас на месте')
         self.assertTrue(order.actuality_confirmed)
         self.assertIsNone(order.departure_prompt_outbox_id)
@@ -318,7 +317,7 @@ class ArrivalAndCompatibilityV176(unittest.TestCase):
     def test_arrival_exact_default_text_and_existing_waiting_flow(self):
         order,_,_,scope=self.arrival()
         self.assertEqual(scope['vk'].send_message.call_args.args[1],
-                         'Водитель на месте! У вас 3 мин бесплатного ожидания, далее 10 руб./мин.')
+                         '🚘 Водитель на месте! Машина: не указана\n⏰ У вас 3 мин бесплатного ожидания, далее 10 руб./мин.')
         self.assertEqual(order.status,'arrived')
         scope['waiting_service'].start_waiting.assert_called_once()
         scope['kb'].passenger_arrived_keyboard.assert_called_once_with(7)

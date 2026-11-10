@@ -234,6 +234,8 @@ def run() -> None:
     if repaired_offers:
         log.warning("Reassigned duplicate pending offers: %s", repaired_offers)
     away_order_notice_service.start_worker()
+    from bot import shortage_notice_service
+    shortage_notice_service.start_worker()
     parallel_orders.start_notice_worker()
     passenger_queue.start_worker()
     booking_service.start_reminder_worker()

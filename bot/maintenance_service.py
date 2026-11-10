@@ -18,6 +18,7 @@ from common.models import (
     OutboxMessage,
     ProcessedEvent,
     ScheduledJob,
+    User,
 )
 
 log = get_logger("bot.maintenance")
@@ -66,6 +67,12 @@ def cleanup_once() -> tuple[int, int]:
                 ),
                 ~OutboxMessage.id.in_(
                     session.query(Order.departure_prompt_outbox_id).filter(Order.departure_prompt_outbox_id.isnot(None))
+                ),
+                ~OutboxMessage.id.in_(
+                    session.query(Order.enroute_notice_outbox_id).filter(Order.enroute_notice_outbox_id.isnot(None))
+                ),
+                ~OutboxMessage.id.in_(
+                    session.query(User.shortage_notice_outbox_id).filter(User.shortage_notice_outbox_id.isnot(None))
                 ),
                 ~OutboxMessage.id.in_(
                     session.query(Order.chat_notice_outbox_id).filter(Order.chat_notice_outbox_id.isnot(None))

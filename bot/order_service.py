@@ -903,9 +903,23 @@ def schedule_prearrival_notice(session: Session, order: Order) -> None:
     )
 
 
+
+def clear_enroute_notice(session: Session, order: Order) -> None:
+    """Delete only this order's obsolete passenger en-route notice."""
+    notice_id = getattr(order, "enroute_notice_outbox_id", None)
+    if notice_id:
+        from . import outbox_service
+        outbox_service.cancel_or_delete(session, notice_id)
+        order.enroute_notice_outbox_id = None
+
+
 def start_free_waiting(session: Session, order: Order) -> None:
     """Called when the driver marks 'arrived'. Starts the free-waiting timer."""
     timers.cancel("eta_prearrival", order.id)
+    if getattr(order, "enroute_notice_outbox_id", None):
+        from . import outbox_service
+        outbox_service.cancel_or_delete(session, order.enroute_notice_outbox_id)
+        order.enroute_notice_outbox_id = None
     if order.departure_prompt_outbox_id:
         from . import outbox_service
         # Preserve clickable driver name, rating, car and ETA when the passenger
@@ -935,9 +949,14 @@ def start_free_waiting(session: Session, order: Order) -> None:
     passenger = session.get(User, order.passenger_id)
     driver = session.get(User, order.driver_id) if order.driver_id else None
     if passenger and not _is_dispatcher_order(order):
+        car = ", ".join(str(value) for value in (
+            getattr(driver, "car_model", None), getattr(driver, "car_color", None),
+            getattr(driver, "car_number", None),
+        ) if value) or "не указана"
         vk.send_message(
             passenger.vk_id,
-            f"Водитель на месте! У вас {free_minutes} мин бесплатного ожидания, далее {get_float(session, 'price_per_waiting_minute', 10):g} руб./мин.",
+            f"🚘 Водитель на месте! Машина: {car}\n"
+            f"⏰ У вас {free_minutes} мин бесплатного ожидания, далее {get_float(session, 'price_per_waiting_minute', 10):g} руб./мин.",
             keyboard=kb.passenger_arrived_keyboard(order.id),
         )
         set_state(session, passenger.vk_id, States.P_ARRIVED, {"order_id": order.id})

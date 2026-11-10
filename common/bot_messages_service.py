@@ -165,7 +165,10 @@ def render_outgoing(
         return default
     if function == "_apply_eta" and "Авто:" in default and "Авто:" not in template and "{default}" not in template:
         return default
-    if function == "start_free_waiting" and "Выберите «" in template:
+    if function == "start_free_waiting" and (
+        "Выберите «" in template or
+        ("Водитель на месте! Машина:" in default and "Машина:" not in template and "{default}" not in template)
+    ):
         return default
     # V178 removes queue/free-line headings. An obsolete static callsite
     # override must not put them back into the newly formatted queue.

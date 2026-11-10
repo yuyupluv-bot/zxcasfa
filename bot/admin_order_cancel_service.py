@@ -198,7 +198,7 @@ def cancel_from_admin(session: Session, order: Order, reason: str = "") -> dict:
     tracked_ids = {
         getattr(order, name, None)
         for name in (
-            "offer_outbox_id", "departure_prompt_outbox_id",
+            "offer_outbox_id", "departure_prompt_outbox_id", "enroute_notice_outbox_id",
             "chat_notice_outbox_id", "chat_actuality_prompt_outbox_id",
             "passenger_rating_prompt_outbox_id", "driver_rating_prompt_outbox_id",
             "parallel_offer_outbox_id",
@@ -230,7 +230,7 @@ def cancel_from_admin(session: Session, order: Order, reason: str = "") -> dict:
             cancelled_messages += 1
 
     for name in (
-        "offer_outbox_id", "departure_prompt_outbox_id", "chat_notice_outbox_id",
+        "offer_outbox_id", "departure_prompt_outbox_id", "enroute_notice_outbox_id", "chat_notice_outbox_id",
         "chat_actuality_prompt_outbox_id", "passenger_rating_prompt_outbox_id",
         "driver_rating_prompt_outbox_id",
     ):

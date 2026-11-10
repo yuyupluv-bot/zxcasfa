@@ -82,6 +82,8 @@ class User(Base):
     payment_bank = Column(Text)
     payment_recipient = Column(String(255))
     show_payment_details = Column(Boolean, default=False, nullable=False)
+    shortage_notice_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
+    shortage_notice_outbox_id = Column(Integer, nullable=True)
 
     rating_sum = Column(Integer, default=0, nullable=False)
     rating_count = Column(Integer, default=0, nullable=False)
@@ -330,6 +332,7 @@ class Order(Base):
     offered_driver_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     offer_outbox_id = Column(Integer, nullable=True)
     departure_prompt_outbox_id = Column(Integer, nullable=True)
+    enroute_notice_outbox_id = Column(Integer, nullable=True)
     passenger_rating_prompt_outbox_id = Column(Integer, nullable=True)
     driver_rating_prompt_outbox_id = Column(Integer, nullable=True)
     chat_actuality_prompt_outbox_id = Column(Integer, nullable=True)

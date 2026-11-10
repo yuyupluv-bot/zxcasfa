@@ -1171,7 +1171,7 @@ def driver_gender_keyboard() -> str:
     ], one_time=True)
 
 
-def driver_settings_keyboard(show_details: bool, driver_gender: str | None = None) -> str:
+def driver_settings_keyboard(show_details: bool, driver_gender: str | None = None, shortage_enabled: bool = False) -> str:
     toggle = "Выключить показ реквизитов" if show_details else "Включить показ реквизитов"
     gender_label = {
         "male": "👨 Пол: мужской",
@@ -1182,6 +1182,7 @@ def driver_settings_keyboard(show_details: bool, driver_gender: str | None = Non
         [_btn("🚗 Моя машина", WHITE, {"cmd":"driver_car"})],
         [_btn("💳 Реквизиты", WHITE, {"cmd":"payment_details"})],
         [_btn(toggle, BLUE, {"cmd":"payment_toggle"})],
+        [_btn(("✅" if shortage_enabled else "❌") + " Уведомлять, при нехватке водителей", WHITE, {"cmd":"shortage_notice_toggle"})],
         [_btn("⬅️ Назад", WHITE, {"cmd":"driver_settings_back"})],
     ])
 

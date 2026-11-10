@@ -2604,6 +2604,8 @@ def passenger_cancel(session: Session, user: User, order_id=None) -> None:
             "После посадки отменить заявку нельзя.",
             keyboard=kb.passenger_in_ride_keyboard(order.id),
         )
+    if getattr(order, "enroute_notice_outbox_id", None):
+        order_service.clear_enroute_notice(session, order)
     chat_reason = order_service.driver_chat_reason_label(session, order) if order.status == "chat_search" else None
     order.status = "cancelled"
     order.cancelled_at = time_utils.now()
@@ -2781,7 +2783,13 @@ def passenger_departure_response(
     order_id=None,
 ) -> None:
     order = passenger_order_for(session, user, order_id)
-    if not order or order.status not in ("assigned", "arrived", "in_progress"):
+    if not order:
+        return show_main_menu(session, user)
+    # Serialize a passenger answer with the driver's arrival so a late
+    # confirmation cannot create an "on the way" notice after arrival.
+    session.flush()
+    session.refresh(order, with_for_update=True)
+    if order.status not in ("assigned", "arrived", "in_progress"):
         return show_main_menu(session, user)
     if cancel and order.status == "in_progress":
         return passenger_cancel(session, user, order.id)
@@ -2800,15 +2808,21 @@ def passenger_departure_response(
         final_text = re.sub(
             r"\s*(?:(?:Вы )?[Жж]д[её]те(?: машинку)?\?)\s*$", "", final_text
         ).rstrip()
-        outcome = "❌ Заявка отменена." if cancel else "Машинка в пути"
-        final_text = f"{final_text}\n{outcome}".lstrip()
-        outbox_service.finalize_tracked_message(
-            session, prompt_id, final_text, replace_text=True, defer_edit=True,
-            replacement_keyboard='{"buttons":[],"inline":true}',
-        )
+        if cancel:
+            final_text = f"{final_text}\n❌ Заявка отменена.".lstrip()
+        if final_text:
+            outbox_service.finalize_tracked_message(
+                session, prompt_id, final_text, replace_text=True, defer_edit=True,
+                replacement_keyboard='{"buttons":[],"inline":true}',
+            )
+        else:
+            outbox_service.cancel_or_delete(session, prompt_id)
     order.departure_prompt_outbox_id = None
     if cancel:
         return passenger_cancel(session, user, order.id)
+    if order.status == "assigned":
+        # Persist the exact message id; arrival will delete this message only.
+        order.enroute_notice_outbox_id = vk.send_tracked_message(user.vk_id, "Машинка в пути")
     order.actuality_confirmed = True
     set_state(session, user.vk_id, States.P_IN_RIDE, {"order_id": order.id})
 
@@ -3392,6 +3406,8 @@ def handle_driver(session, user, state, text, payload, attachments):
         return driver_payment_recipient(session, user, "")
     if cmd == "payment_toggle":
         return driver_payment_toggle(session, user)
+    if cmd == "shortage_notice_toggle":
+        return driver_shortage_notice_toggle(session, user)
     if cmd == "driver_car":
         return driver_edit_car(session, user)
     if cmd == "queue":
@@ -3730,8 +3746,21 @@ def driver_set_gender(session: Session, user: User, gender: str | None) -> None:
 
 def driver_show_settings(session: Session, user: User) -> None:
     status = "включён" if user.show_payment_details else "выключен"
-    vk.send_message(user.vk_id, f"⚙ Настройки водителя. Показ реквизитов: {status}.", keyboard=kb.driver_settings_keyboard(bool(user.show_payment_details), user.driver_gender))
+    vk.send_message(user.vk_id, f"⚙ Настройки водителя. Показ реквизитов: {status}.", keyboard=kb.driver_settings_keyboard(bool(user.show_payment_details), user.driver_gender, bool(getattr(user, "shortage_notice_enabled", False))))
     set_state(session, user.vk_id, States.D_SETTINGS)
+
+
+
+def driver_shortage_notice_toggle(session: Session, user: User) -> None:
+    # Lock against the reconciliation worker, including an overlapping toggle.
+    session.flush()
+    session.refresh(user, with_for_update=True)
+    user.shortage_notice_enabled = not bool(user.shortage_notice_enabled)
+    if not user.shortage_notice_enabled and user.shortage_notice_outbox_id:
+        from . import outbox_service
+        outbox_service.cancel_or_delete(session, user.shortage_notice_outbox_id)
+        user.shortage_notice_outbox_id = None
+    driver_show_settings(session, user)
 
 
 def driver_payment_start(session: Session, user: User) -> None:
@@ -3845,7 +3874,7 @@ def driver_payment_recipient(session: Session, user: User, text: str) -> None:
         return driver_payment_start(session, user)
     user.payment_recipient = (text or "").strip() or None
     user.show_payment_details = False
-    vk.send_message(user.vk_id, "Реквизиты сохранены. Показ реквизитов пока выключен.", keyboard=kb.driver_settings_keyboard(False, user.driver_gender))
+    vk.send_message(user.vk_id, "Реквизиты сохранены. Показ реквизитов пока выключен.", keyboard=kb.driver_settings_keyboard(False, user.driver_gender, bool(getattr(user, "shortage_notice_enabled", False))))
     set_state(session, user.vk_id, States.D_SETTINGS, {}, merge=False)
 
 
@@ -3854,7 +3883,7 @@ def driver_payment_cancel(session: Session, user: User) -> None:
     vk.send_message(
         user.vk_id,
         "Ввод реквизитов отменён. Сохранённые реквизиты не изменены.",
-        keyboard=kb.driver_settings_keyboard(bool(user.show_payment_details), user.driver_gender),
+        keyboard=kb.driver_settings_keyboard(bool(user.show_payment_details), user.driver_gender, bool(getattr(user, "shortage_notice_enabled", False))),
     )
     set_state(session, user.vk_id, States.D_SETTINGS, {}, merge=False)
 
@@ -3867,11 +3896,11 @@ def _payment_details_ready(user: User) -> bool:
 
 def driver_payment_toggle(session: Session, user: User) -> None:
     if not _payment_details_ready(user):
-        vk.send_message(user.vk_id, "Сначала заполните реквизиты.", keyboard=kb.driver_settings_keyboard(False, user.driver_gender))
+        vk.send_message(user.vk_id, "Сначала заполните реквизиты.", keyboard=kb.driver_settings_keyboard(False, user.driver_gender, bool(getattr(user, "shortage_notice_enabled", False))))
         return
     user.show_payment_details = not bool(user.show_payment_details)
     state = "включён" if user.show_payment_details else "выключен"
-    vk.send_message(user.vk_id, f"Показ реквизитов {state}.", keyboard=kb.driver_settings_keyboard(bool(user.show_payment_details), user.driver_gender))
+    vk.send_message(user.vk_id, f"Показ реквизитов {state}.", keyboard=kb.driver_settings_keyboard(bool(user.show_payment_details), user.driver_gender, bool(getattr(user, "shortage_notice_enabled", False))))
     set_state(session, user.vk_id, States.D_SETTINGS)
 
 
@@ -5006,6 +5035,11 @@ def driver_arrived(session: Session, user: User) -> None:
     order = active_order_for(session, user, as_driver=True)
     if not order:
         return show_main_menu(session, user)
+    # Preserve any promotion repairs made by active_order_for before locking.
+    session.flush()
+    session.refresh(order, with_for_update=True)
+    if order.driver_id != user.id or order.status != "assigned":
+        return show_main_menu(session, user)
     order_service.start_free_waiting(session, order)
     from . import parallel_orders
     parallel_orders.notify_after_arrival(session, user)
@@ -5270,6 +5304,8 @@ def driver_cancel_order(session: Session, user: User) -> None:
     order = active_order_for(session, user, as_driver=True)
     if not order:
         return show_main_menu(session, user)
+    if getattr(order, "enroute_notice_outbox_id", None):
+        order_service.clear_enroute_notice(session, order)
     within = driver_block_service.within_grace(session, order.driver_accept_time)
     order.status = "cancelled"
     order.cancelled_at = time_utils.now()
@@ -5303,6 +5339,8 @@ def driver_cancel_passenger_order(session: Session, user: User) -> None:
     order = active_order_for(session, user, as_driver=True)
     if not order:
         return show_main_menu(session, user)
+    if getattr(order, "enroute_notice_outbox_id", None):
+        order_service.clear_enroute_notice(session, order)
     order.status = "cancelled"
     order.cancelled_at = time_utils.now()
     order.cancelled_by = "driver"
@@ -7465,6 +7503,8 @@ def driver_cancel_active(session: Session, user: User, reason: str) -> None:
             "Неизвестная причина отмены. Выберите вариант ещё раз.",
             keyboard=kb.driver_active_cancel_keyboard(),
         )
+    if getattr(order, "enroute_notice_outbox_id", None):
+        order_service.clear_enroute_notice(session, order)
     timers.cancel_all_for_order(order.id)
     from . import parallel_orders
     # Any automatic parallel card was valid only while this exact trip was

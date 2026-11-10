@@ -151,7 +151,8 @@ class MessageChangesV173(unittest.TestCase):
             callback(session, user, False, 7)
         scope['vk'].send_message.assert_called_once_with(11, 'Клиент ожидает вас на месте')
         args = outbox.finalize_tracked_message.call_args
-        self.assertEqual(args.args[2], 'Карточка\n⏰ Будет через 2 мин.\nМашинка в пути')
+        self.assertEqual(args.args[2], 'Карточка\n⏰ Будет через 2 мин.')
+        scope['vk'].send_tracked_message.assert_called_once_with(22, 'Машинка в пути')
         self.assertTrue(args.kwargs['defer_edit'])
         self.assertTrue(args.kwargs['replace_text'])
         scope['kb'].passenger_ride_keyboard.assert_not_called()
