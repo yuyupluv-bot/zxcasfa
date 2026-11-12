@@ -316,7 +316,7 @@ class ArrivalAndCompatibilityV176(unittest.TestCase):
 
     def test_arrival_exact_default_text_and_existing_waiting_flow(self):
         order,_,_,scope=self.arrival()
-        self.assertEqual(scope['vk'].send_message.call_args.args[1],
+        self.assertEqual(scope['vk'].send_tracked_message.call_args.args[1],
                          '🚘 Водитель на месте! Машина: не указана\n⏰ У вас 3 мин бесплатного ожидания, далее 10 руб./мин.')
         self.assertEqual(order.status,'arrived')
         scope['waiting_service'].start_waiting.assert_called_once()
@@ -324,7 +324,7 @@ class ArrivalAndCompatibilityV176(unittest.TestCase):
 
     def test_arrival_text_uses_real_configured_tariff(self):
         *_,scope=self.arrival(free=5,rate=12.5)
-        self.assertIn('5 мин бесплатного ожидания, далее 12.5 руб./мин.',scope['vk'].send_message.call_args.args[1])
+        self.assertIn('5 мин бесплатного ожидания, далее 12.5 руб./мин.',scope['vk'].send_tracked_message.call_args.args[1])
 
     def test_arrival_deletes_new_question_only(self):
         order,session,outbox,_=self.arrival(prompt='Ждете?')

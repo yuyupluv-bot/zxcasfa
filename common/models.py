@@ -335,6 +335,8 @@ class Order(Base):
     offer_outbox_id = Column(Integer, nullable=True)
     departure_prompt_outbox_id = Column(Integer, nullable=True)
     enroute_notice_outbox_id = Column(Integer, nullable=True)
+    # Passenger arrival notice; removed when the driver marks boarding.
+    arrival_notice_outbox_id = Column(Integer, nullable=True)
     passenger_rating_prompt_outbox_id = Column(Integer, nullable=True)
     driver_rating_prompt_outbox_id = Column(Integer, nullable=True)
     chat_actuality_prompt_outbox_id = Column(Integer, nullable=True)

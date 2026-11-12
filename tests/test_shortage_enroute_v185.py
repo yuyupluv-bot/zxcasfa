@@ -59,7 +59,7 @@ def test_arrival_deletes_exact_enroute_and_displays_car(_longpoll):
     s.add(notice);s.flush()
     order=m.Order(passenger_id=p.id,driver_id=d.id,address_from='a',address_to='b',status='assigned',enroute_notice_outbox_id=notice.id)
     s.add(order);s.flush()
-    with patch.object(order_service.vk,'send_message') as send, patch.object(order_service.waiting_service,'start_waiting'), patch.object(order_service.timers,'cancel'):
+    with patch.object(order_service.vk,'send_tracked_message',return_value=123) as send, patch.object(order_service.waiting_service,'start_waiting'), patch.object(order_service.timers,'cancel'):
         order_service.start_free_waiting(s,order)
     assert notice.status=='cancelled'
     assert order.enroute_notice_outbox_id is None

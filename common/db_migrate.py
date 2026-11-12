@@ -229,6 +229,7 @@ def ensure_columns() -> bool:
         "CREATE INDEX IF NOT EXISTS ix_orders_requested_driver_id ON orders(requested_driver_id)",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_outbox_id INTEGER",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS departure_prompt_outbox_id INTEGER",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS arrival_notice_outbox_id INTEGER",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS passenger_rating_prompt_outbox_id INTEGER",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_rating_prompt_outbox_id INTEGER",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS chat_actuality_prompt_outbox_id INTEGER",

@@ -953,7 +953,7 @@ def start_free_waiting(session: Session, order: Order) -> None:
             getattr(driver, "car_model", None), getattr(driver, "car_color", None),
             getattr(driver, "car_number", None),
         ) if value) or "не указана"
-        vk.send_message(
+        order.arrival_notice_outbox_id = vk.send_tracked_message(
             passenger.vk_id,
             f"🚘 Водитель на месте! Машина: {car}\n"
             f"⏰ У вас {free_minutes} мин бесплатного ожидания, далее {get_float(session, 'price_per_waiting_minute', 10):g} руб./мин.",

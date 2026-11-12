@@ -5113,6 +5113,13 @@ def driver_seated(session: Session, user: User) -> None:
     waiting_service.stop_waiting(session, order)
     order.status = "in_progress"
     timers.cancel("waiting", order.id)
+    # Retire only this order's arrival/waiting card. The durable outbox
+    # cancels an unsent card or retries deletion after an in-flight send.
+    arrival_notice_id = getattr(order, "arrival_notice_outbox_id", None)
+    if arrival_notice_id:
+        from . import outbox_service
+        if outbox_service.cancel_or_delete(session, arrival_notice_id):
+            order.arrival_notice_outbox_id = None
     if _is_dispatcher_order(order):
         dispatcher = session.get(User, order.dispatcher_id) if order.dispatcher_id else None
         if dispatcher:
