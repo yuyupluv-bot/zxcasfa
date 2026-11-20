@@ -66,6 +66,7 @@ from common.models import (
     Review,
     RotatingChatPost,
     ScheduledJob,
+    Setting,
     State,
     User,
 )
@@ -75,6 +76,7 @@ from common import time_utils
 from common.settings_service import DEFAULTS, active_text_keys, ensure_defaults, get_all_settings, get_int, get_setting, set_setting
 
 from . import broadcast
+from .giveaway_selection import parse_winner_ids, select_winners
 from .auth import login_required, verify_admin
 from .excel_export import build_orders_workbook, build_stats_workbook
 from .statistics_service import build_statistics
@@ -1563,6 +1565,42 @@ def _giveaway_candidates(s, form: dict) -> list[dict]:
     return candidates
 
 
+GIVEAWAY_FIXED_WINNERS_KEY = "giveaway_fixed_winner_vk_ids"
+
+
+def _fixed_winner_ids(s) -> list[int]:
+    # Read directly, avoiding the per-process settings cache across workers.
+    row = s.query(Setting).filter(Setting.key == GIVEAWAY_FIXED_WINNERS_KEY).one_or_none()
+    return parse_winner_ids((row.value or "") if row else "")
+
+
+@app.route("/giveaway/winners", methods=["GET", "POST"])
+@login_required
+def giveaway_winners_view():
+    s = db()
+    row = s.query(Setting).filter(Setting.key == GIVEAWAY_FIXED_WINNERS_KEY).one_or_none()
+    raw = (row.value or "") if row else ""
+    if request.method == "POST":
+        raw = request.form.get("winner_ids", "").strip()
+        try:
+            ids = parse_winner_ids(raw)
+            existing = {vk_id for (vk_id,) in s.query(User.vk_id).filter(User.vk_id.in_(ids)).all()} if ids else set()
+            missing = [str(vk_id) for vk_id in ids if vk_id not in existing]
+            if missing:
+                raise ValueError("Пользователи не найдены в базе: " + ", ".join(missing))
+        except ValueError as exc:
+            flash(str(exc), "warning")
+        else:
+            if row is None:
+                row = Setting(key=GIVEAWAY_FIXED_WINNERS_KEY)
+                s.add(row)
+            row.value = "\n".join(map(str, ids))
+            log_action("giveaway_fixed_winners_update", "vk_ids=" + ",".join(map(str, ids)))
+            flash("Список победителей сохранён", "success")
+            return redirect(url_for("giveaway_winners_view"))
+    return render_template("giveaway_winners.html", winner_ids=raw)
+
+
 @app.route("/giveaway", methods=["GET", "POST"])
 @login_required
 def giveaway_view():
@@ -1570,6 +1608,7 @@ def giveaway_view():
     candidates: list[dict] = []
     winners: list[dict] = []
     result_text = ""
+    fixed_count = 0
     if request.method == "POST":
         try:
             winners_count = max(1, min(50, int(form["winners_count"])))
@@ -1594,19 +1633,25 @@ def giveaway_view():
                 flash("Укажите хотя бы один приз", "warning")
             elif len(prizes) not in (1,) and len(prizes) < winners_count:
                 flash("Укажите по одному призу для каждого победителя или один общий приз", "warning")
-            elif len(candidates) < winners_count:
-                flash(
-                    f"Под условия подходят только {len(candidates)} человек, а победителей указано {winners_count}",
-                    "warning",
-                )
             else:
-                chosen = secrets.SystemRandom().sample(candidates, winners_count)
+                try:
+                    fixed_ids = _fixed_winner_ids(db())
+                    chosen = select_winners(candidates, fixed_ids, winners_count)
+                except ValueError as exc:
+                    flash(str(exc), "warning")
+                    return render_template("giveaway.html", form=form, candidates=candidates, winners=[], result_text="", fixed_count=0)
+                fixed_count = len(fixed_ids)
                 for index, winner in enumerate(chosen):
                     winner = dict(winner)
                     winner["place"] = index + 1
                     winner["prize"] = prizes[0] if len(prizes) == 1 else prizes[index]
                     winners.append(winner)
-                lines = ["🎉 ИТОГИ РОЗЫГРЫША", "", form["contest_text"], "", "🏆 Победители:"]
+                lines = ["🎉 ИТОГИ РОЗЫГРЫША", "", form["contest_text"], ""]
+                if fixed_count:
+                    label = "Первое место назначено организатором" if fixed_count == 1 else f"Первые {fixed_count} мест назначены организатором"
+                    lines.append(label + (", остальные места выбраны случайно." if fixed_count < winners_count else "."))
+                    lines.append("")
+                lines.append("🏆 Победители:")
                 for winner in winners:
                     lines.append(
                         f"{winner['place']}. [id{winner['vk_id']}|{winner['name']}] — {winner['prize']}"
@@ -1615,8 +1660,8 @@ def giveaway_view():
                 result_text = "\n".join(lines)
                 log_action(
                     "giveaway_draw",
-                    "eligible=%s winners=%s ids=%s" % (
-                        len(candidates), winners_count,
+                    "eligible=%s winners=%s fixed_vk_ids=%s ids=%s" % (
+                        len(candidates), winners_count, ",".join(map(str, fixed_ids)),
                         ",".join(str(item["id"]) for item in winners),
                     ),
                 )
@@ -1626,6 +1671,7 @@ def giveaway_view():
         candidates=candidates,
         winners=winners,
         result_text=result_text,
+        fixed_count=fixed_count,
     )
 
 

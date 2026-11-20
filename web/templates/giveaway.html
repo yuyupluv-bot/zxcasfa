@@ -3,9 +3,9 @@
 {% block content %}
 <div class="page-title giveaway-heading">
   <div>
-    <span class="eyebrow">Честный случайный выбор</span>
+    <span class="eyebrow">Выбор победителей</span>
     <h1>Розыгрыш</h1>
-    <p>Задайте условия — панель найдёт подходящих пассажиров и случайно выберет победителей.</p>
+    <p>Задайте условия — панель найдёт подходящих пассажиров и выберет победителей. Назначенные заранее участники занимают первые места, остальные выбираются случайно. <a href="{{ url_for('giveaway_winners_view') }}">Проверить список назначенных</a>.</p>
   </div>
   {% if candidates %}<div class="eligible-badge"><i class="bi bi-people-fill"></i><strong>{{ candidates|length }}</strong><span>участников подходят</span></div>{% endif %}
 </div>
@@ -87,6 +87,7 @@
   <div class="result-kicker"><i class="bi bi-trophy-fill"></i> Розыгрыш проведён</div>
   <h2>Поздравляем победителей!</h2>
   <p>{{ form.contest_text }}</p>
+  {% if fixed_count %}<p><strong>Внимание: {{ fixed_count }} победителей назначены организатором{% if fixed_count < winners|length %}, остальные выбраны случайно{% endif %}.</strong></p>{% endif %}
   <div class="winner-grid">
     {% for winner in winners %}
     <article class="winner-card place-{{ winner.place }}">
