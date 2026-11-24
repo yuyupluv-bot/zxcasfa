@@ -109,6 +109,8 @@ def _find_apk_file():
   APK_FILE,
   Path("/app/downloads/BEZTAKSY.apk"),
   Path("/app/android-driver-app/app/downloads/BEZTAKSY.apk"),
+  # The image source may live outside /app when the host mounts that path.
+  Path(__file__).resolve().parents[1] / "downloads" / "BEZTAKSY.apk",
  ]
  seen = set()
  for candidate in candidates:

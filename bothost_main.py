@@ -48,8 +48,25 @@ def validate_environment(env: dict[str, str]) -> list[str]:
     return errors
 
 
-def child_environment(role: str) -> dict[str, str]:
+def project_environment() -> dict[str, str]:
+    """Put this checkout before unrelated packages in every child process."""
     env = os.environ.copy()
+    previous = env.get('PYTHONPATH', '')
+    env['PYTHONPATH'] = str(ROOT) + (os.pathsep + previous if previous else '')
+    return env
+
+
+def migration_command() -> list[str]:
+    # -c can omit cwd from sys.path (e.g. PYTHONSAFEPATH=1); pin our root
+    # explicitly before importing the generic package name 'common'.
+    code = (f'import sys; sys.path.insert(0, {str(ROOT)!r}); '
+            'from common.db_migrate import ensure_schema; '
+            'raise SystemExit(0 if ensure_schema() else 1)')
+    return [sys.executable, '-u', '-c', code]
+
+
+def child_environment(role: str) -> dict[str, str]:
+    env = project_environment()
     env['AUTO_MIGRATE_ON_START'] = '0'
     env['PYTHONUNBUFFERED'] = '1'
     prefix = 'BOT' if role == 'bot' else 'ADMIN'
@@ -121,6 +138,8 @@ def main() -> int:
     os.chdir(ROOT)
     from dotenv import load_dotenv
     load_dotenv(ROOT / '.env')
+    if ROOT != Path('/app'):
+        load_dotenv('/app/.env')  # preserve an existing mounted .env
     logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(name)s | %(message)s')
     errors = validate_environment(dict(os.environ))
     if errors:
@@ -140,11 +159,15 @@ def main() -> int:
     stop = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: stop.set())
+    migration_file = ROOT / 'common' / 'db_migrate.py'
+    if not migration_file.is_file() or not (ROOT / 'common' / '__init__.py').is_file():
+        log.error('STARTUP SOURCE ERROR: migration package missing under %s', ROOT)
+        return 1
+    log.info('STARTUP SOURCE OK: project root=%s', ROOT)
     log.info('STARTUP BOTHOST: checking database and applying migrations before bot/admin')
-    migration = subprocess.Popen([
-        sys.executable, '-u', '-c',
-        'from common.db_migrate import ensure_schema; raise SystemExit(0 if ensure_schema() else 1)',
-    ], cwd=ROOT, start_new_session=True)
+    migration = subprocess.Popen(
+        migration_command(), cwd=ROOT, env=project_environment(), start_new_session=True,
+    )
     deadline = time.monotonic() + 300
     try:
         while migration.poll() is None:
