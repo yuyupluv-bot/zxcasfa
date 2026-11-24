@@ -1,0 +1,240 @@
+........F..bot exited code=0; restart in 2s (other service stays running)
+bot exited code=0; restart in 4s (other service stays running)
+...EE...............................................................................................................................................................................................................................FFFE............................................F....bot/handlers.py:483: ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  from . import common_chat_notices
+....bot/handlers.py:483: ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  from . import common_chat_notices
+..bot/handlers.py:483: ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  from . import common_chat_notices
+bot/handlers.py:492: ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  from . import common_chat_notices
+..bot/handlers.py:483: ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  from . import common_chat_notices
+..bot/handlers.py:483: ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  from . import common_chat_notices
+bot/handlers.py:483: ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  from . import common_chat_notices
+bot/handlers.py:483: ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  from . import common_chat_notices
+bot/handlers.py:483: ImportWarning: can't resolve package from __spec__ or __package__, falling back on __name__ and __path__
+  from . import common_chat_notices
+............................................................................................................................................Possible bot stall: stuck; collecting thread stacks
+Bot made progress; watchdog recovery cancelled
+.....Possible bot stall: stuck; collecting thread stacks
+Exiting stuck bot (code=70): stuck; Docker restart policy must restart this container
+................................................................................................................F........../vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v64_text_order.py:14: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/bot/handlers.py' mode='r' encoding='utf-8'>
+  return io.open(path, encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+................/vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v70_chat_claim.py:12: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/bot/handlers.py' mode='r' encoding='utf-8'>
+  return io.open(os.path.join(BOT, path), encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+../vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v70_chat_claim.py:12: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/bot/queue_service.py' mode='r' encoding='utf-8'>
+  return io.open(os.path.join(BOT, path), encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.../vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v71_chat_claim_always_assigns.py:12: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/bot/handlers.py' mode='r' encoding='utf-8'>
+  return io.open(os.path.join(BOT, path), encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+............................................................................................................/vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v76_queue_and_payouts.py:12: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/bot/order_service.py' mode='r' encoding='utf-8'>
+  return io.open(os.path.join(ROOT, rel), encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.../vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v76_queue_and_payouts.py:12: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/bot/handlers.py' mode='r' encoding='utf-8'>
+  return io.open(os.path.join(ROOT, rel), encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v76_queue_and_payouts.py:12: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/bot/queue_service.py' mode='r' encoding='utf-8'>
+  return io.open(os.path.join(ROOT, rel), encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v76_queue_and_payouts.py:12: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/migrations/versions/0041_front_notice_tracking.py' mode='r' encoding='utf-8'>
+  return io.open(os.path.join(ROOT, rel), encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.../vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v76_queue_and_payouts.py:12: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/common/models.py' mode='r' encoding='utf-8'>
+  return io.open(os.path.join(ROOT, rel), encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v76_queue_and_payouts.py:12: ResourceWarning: unclosed file <_io.TextIOWrapper name='/vercel/sandbox/data/project/zxcasfa-main/common/db_migrate.py' mode='r' encoding='utf-8'>
+  return io.open(os.path.join(ROOT, rel), encoding="utf-8").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+...................................................................................................................................................E.....sss.FFEE
+======================================================================
+ERROR: test_giveaway_fixed_winners (unittest.loader._FailedTest.test_giveaway_fixed_winners)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_giveaway_fixed_winners
+Traceback (most recent call last):
+  File "/usr/lib64/python3.13/unittest/loader.py", line 403, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib64/python3.13/unittest/loader.py", line 346, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_giveaway_fixed_winners.py", line 9, in <module>
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+
+
+======================================================================
+ERROR: test_parallel_confirm_v186 (unittest.loader._FailedTest.test_parallel_confirm_v186)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_parallel_confirm_v186
+Traceback (most recent call last):
+  File "/usr/lib64/python3.13/unittest/loader.py", line 403, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib64/python3.13/unittest/loader.py", line 346, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_parallel_confirm_v186.py", line 6, in <module>
+    from integration_v181_fixes import ImportedFlowTests
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/integration_v181_fixes.py", line 17, in <module>
+    from sqlalchemy import create_engine, func
+ModuleNotFoundError: No module named 'sqlalchemy'
+
+
+======================================================================
+ERROR: test_user_state_transitions_are_database_serialized (test_requirements_v163_direct_selection_dedup.DirectSelectionDedupV163.test_user_state_transitions_are_database_serialized)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v163_direct_selection_dedup.py", line 36, in test_user_state_transitions_are_database_serialized
+    user_lookup = handler.split("# Serialize one user's state transitions", 1)[1]
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+IndexError: list index out of range
+
+======================================================================
+ERROR: test_shortage_enroute_v185 (unittest.loader._FailedTest.test_shortage_enroute_v185)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_shortage_enroute_v185
+Traceback (most recent call last):
+  File "/usr/lib64/python3.13/unittest/loader.py", line 403, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib64/python3.13/unittest/loader.py", line 346, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_shortage_enroute_v185.py", line 5, in <module>
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+
+
+======================================================================
+ERROR: test_v182_user_requests (unittest.loader._FailedTest.test_v182_user_requests)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_v182_user_requests
+Traceback (most recent call last):
+  File "/usr/lib64/python3.13/unittest/loader.py", line 403, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib64/python3.13/unittest/loader.py", line 346, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_v182_user_requests.py", line 7, in <module>
+    import pytest
+ModuleNotFoundError: No module named 'pytest'
+
+
+======================================================================
+ERROR: test_v183_chat_filter_and_prices (unittest.loader._FailedTest.test_v183_chat_filter_and_prices)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_v183_chat_filter_and_prices
+Traceback (most recent call last):
+  File "/usr/lib64/python3.13/unittest/loader.py", line 403, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib64/python3.13/unittest/loader.py", line 346, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_v183_chat_filter_and_prices.py", line 5, in <module>
+    import pytest
+ModuleNotFoundError: No module named 'pytest'
+
+
+======================================================================
+FAIL: test_container_and_archive_entrypoints (test_bothost_deploy.BothostDeployTests.test_container_and_archive_entrypoints)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_bothost_deploy.py", line 70, in test_container_and_archive_entrypoints
+    self.assertIn('"bothost_main.py"', (root/'Dockerfile').read_text())
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '"bothost_main.py"' not found in 'FROM python:3.11-slim\n\nENV PYTHONDONTWRITEBYTECODE=1 \\\n    PYTHONUNBUFFERED=1 \\\n    PIP_NO_CACHE_DIR=1 \\\n    PORT=3000\n\nWORKDIR /app\n\nRUN groupadd --system app && useradd --system --gid app --home-dir /app app\n\nCOPY requirements.txt ./\nRUN python -m pip install --upgrade pip && python -m pip install -r requirements.txt\n\nCOPY --chown=app:app . .\nRUN mkdir -p /app/logs /app/data/push_sounds && chown -R app:app /app/logs /app/data\n\nUSER root\nEXPOSE 3000\n\nCMD ["python", "-c", "import os,pwd,stat; from pathlib import Path; p=Path(\'/app/data/push_sounds\'); p.mkdir(parents=True,exist_ok=True); u=pwd.getpwnam(\'app\'); fd=os.open(p,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW); os.fchown(fd,u.pw_uid,u.pw_gid); os.fchmod(fd,stat.S_IMODE(os.fstat(fd).st_mode)|0o700); os.close(fd); os.initgroups(u.pw_name,u.pw_gid); os.setgid(u.pw_gid); os.setuid(u.pw_uid); print(\'STARTUP STORAGE OK: uid=\'+str(os.geteuid()),flush=True); os.execvp(\'python\',[\'python\',\'bothost_main.py\'])"]\n'
+
+======================================================================
+FAIL: test_direct_offer_failure_logs_exact_reason (test_requirements_v163_direct_selection_dedup.DirectSelectionDedupV163.test_direct_offer_failure_logs_exact_reason)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v163_direct_selection_dedup.py", line 50, in test_direct_offer_failure_logs_exact_reason
+    self.assertIn("rejection_reasons", offer)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'rejection_reasons' not found in 'def offer_to_selected_driver(session: Session, order: Order, driver: User) -> bool:\n    """Offer a new request only to the driver explicitly selected by its passenger."""\n    locked_order = (\n        session.query(Order)\n        .filter(Order.id == order.id)\n        .with_for_update()\n        .one_or_none()\n    )\n    entry = (\n        session.query(DriverQueue)\n        .filter(DriverQueue.driver_id == driver.id)\n        .with_for_update()\n        .one_or_none()\n    )\n    selection = (\n        session.query(DriverSelection)\n        .filter(\n            DriverSelection.driver_id == driver.id,\n            DriverSelection.passenger_id == order.passenger_id,\n        )\n        .with_for_update()\n        .one_or_none()\n    )\n    selection_live = bool(selection and selection.expires_at > dt.datetime.now(dt.timezone.utc))\n    if (\n        not locked_order\n        or not selection_live\n        or locked_order.requested_driver_id != driver.id\n        or locked_order.driver_id is not None\n        or locked_order.parallel_driver_id is not None\n        or locked_order.status in (\n            "assigned", "arrived", "in_progress", "completed", "cancelled",\n        )\n        or not entry or entry.status not in ("offered", "waiting")\n        or not driver.is_on_line or driver.driver_status != "online"\n        or driver.is_blocked\n        or queue_service._driver_has_active_work(session, driver.id)\n    ):\n        log.warning("Direct offer rejected: order=%s driver=%s selection_live=%s queue=%s status=%s",\n                    order.id, driver.id, selection_live, entry.status if entry else None, driver.driver_status)\n        return False\n    order = locked_order\n    from . import parallel_orders\n    if not parallel_orders.local_line_allows(order, driver):\n        return False\n    entry.status = "offered"\n    order.status = "searching"\n    _set_current_offer(session, order, driver.id)\n    session.flush()\n    from . import passenger_queue\n    passenger_queue.pause_actuality_prompts(session, except_order_id=order.id)\n    log.info(\n        "Direct offer: order=%s selected_driver=%s queue reservation=offered",\n        order.id,\n        driver.id,\n    )\n\n    text = (\n        f"🔔 Персональная заявка #{order.number} ({order_type_label(order)})\\n"\n        f"Пассажир выбрал вас.\\nВаша заявка: {order_text(order)}"\n    )\n    if order.customer_price is not None:\n        text += f"\\n💰 Цена клиента: {float(order.customer_price):.0f} ₽"\n    creator = session.get(User, order.passenger_id)\n    if creator:\n        full_name = creator.full_name or ("id" + str(creator.vk_id))\n        text += "\\n👤 От кого: [id%s|%s] %s" % (\n            creator.vk_id, full_name, passenger_rating_text(creator)\n        )\n    if order.actuality_confirmed:\n        text += "\\n✅ Клиент подтвердил актуальность заявки."\n    if order.comment:\n        text += f"\\n💬 Комментарий: {order.comment}"\n    text += _extras_summary(session, order)\n    if order.night_surcharge:\n        night_amount = get_int(session, "night_surcharge_amount", 50)\n        text += f"\\n🌙 Ночной тариф: +{night_amount} ₽ (23:00–06:00)"\n    if is_delivery_type(order):\n        text += "\\nℹ️ При отказе от доставки водитель остаётся на своём месте в очереди."\n    prepared_voice = vk.prepare_voice_attachment(driver.vk_id, order.voice_attachment)\n    order.offer_outbox_id = vk.send_tracked_message(\n        driver.vk_id,\n        text,\n        keyboard=kb.order_offer_keyboard(order.id, order.customer_price is not None),\n        attachment=prepared_voice,\n    )\n    if not order.offer_outbox_id:\n        log.error("Direct offer enqueue failed: order=%s driver=%s", order.id, driver.id)\n        order.offered_driver_id = None\n        return False\n    set_state(session, driver.vk_id, States.D_OFFER, {"order_id": order.id})\n    from . import push_service\n    push_event = "customer_price" if order.customer_price is not None and not order.dispatcher_id else ("dispatcher_order" if order.dispatcher_id else "new_order")\n    push_service.send(session, driver.id, push_event, order)\n    timeout = (\n        30\n        if order.customer_price is not None and not order.dispatcher_id\n        else get_int(session, "driver_accept_timeout", 60)\n    )\n    order_id = order.id\n    driver_id = driver.id\n    timers.schedule(\n        "accept", order.id, timeout,\n        lambda: _accept_timeout(order_id, driver_id),\n    )\n    return True'
+
+======================================================================
+FAIL: test_duplicate_order_creation_is_stopped_before_draft_processing (test_requirements_v163_direct_selection_dedup.DirectSelectionDedupV163.test_duplicate_order_creation_is_stopped_before_draft_processing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v163_direct_selection_dedup.py", line 41, in test_duplicate_order_creation_is_stopped_before_draft_processing
+    self.assertLess(
+    ~~~~~~~~~~~~~~~^
+        create.index("existing_order = active_order_for"),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        create.index("data = get_data"),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: 632 not less than 87
+
+======================================================================
+FAIL: test_message_identity_wins_over_unstable_event_id (test_requirements_v163_direct_selection_dedup.DirectSelectionDedupV163.test_message_identity_wins_over_unstable_event_id)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v163_direct_selection_dedup.py", line 28, in test_message_identity_wins_over_unstable_event_id
+    self.assertLess(
+    ~~~~~~~~~~~~~~~^
+        event_key.index("conversation_message_id"),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        event_key.index('explicit = getattr(event, "event_id"'),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: 352 not less than 34
+
+======================================================================
+FAIL: test_calculation_code_and_defaults_removed (test_requirements_v172_remove_calculator.CalculatorRemovalV172.test_calculation_code_and_defaults_removed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v172_remove_calculator.py", line 24, in test_calculation_code_and_defaults_removed
+    self.assertFalse((ROOT / 'bot/price_calculator.py').exists())
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_vk_migration_graph_is_linear_and_has_one_head (test_requirements_v57_remove_telegram_fork.RemoveTelegramForkV57Tests.test_vk_migration_graph_is_linear_and_has_one_head)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_requirements_v57_remove_telegram_fork.py", line 45, in test_vk_migration_graph_is_linear_and_has_one_head
+    self.assertEqual({"0057_parallel_accept_time"}, set(revisions)-parents)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Items in the first set but not the second:
+'0057_parallel_accept_time'
+Items in the second set but not the first:
+'0058_arrival_notice'
+
+======================================================================
+FAIL: test_actual_orm_and_mobile_api (test_v180_driver_isolated.DriverV180Tests.test_actual_orm_and_mobile_api)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_v180_driver_isolated.py", line 10, in test_actual_orm_and_mobile_api
+    self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/integration_v180_driver.py", line 15, in <module>
+    from sqlalchemy import create_engine
+ModuleNotFoundError: No module named 'sqlalchemy'
+
+
+======================================================================
+FAIL: test_real_orm_requested_scenarios (test_v181_fixes_isolated.RequestedFixesV181.test_real_orm_requested_scenarios)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/test_v181_fixes_isolated.py", line 11, in test_real_orm_requested_scenarios
+    self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Traceback (most recent call last):
+  File "/vercel/sandbox/data/project/zxcasfa-main/tests/integration_v181_fixes.py", line 17, in <module>
+    from sqlalchemy import create_engine, func
+ModuleNotFoundError: No module named 'sqlalchemy'
+
+
+----------------------------------------------------------------------
+Ran 869 tests in 49.648s
+
+FAILED (failures=8, errors=6, skipped=3)

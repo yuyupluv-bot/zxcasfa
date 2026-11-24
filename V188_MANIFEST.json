@@ -1,0 +1,112 @@
+[
+  {
+    "path": "CHANGES_V188_RU.md",
+    "status": "added",
+    "sha256": "50887e17bcbeffaa8876e501aca2f5310cd8e54119bb37d3917d50c9009e1491"
+  },
+  {
+    "path": "QA_V188_RU.md",
+    "status": "added",
+    "sha256": "051c6197cd73a3921d5b8ac9b2e5f02117cee5d5009cefc4399d772dc6468bff"
+  },
+  {
+    "path": "bot/admin_order_assign_service.py",
+    "status": "modified",
+    "sha256": "e3f2138ee7337242489f7d30b7ed42ee60530740e5b5dfcd701fb00360098f29"
+  },
+  {
+    "path": "bot/blacklist_service.py",
+    "status": "added",
+    "sha256": "5a30214ca49669c7d9a2585927db48a1e68eee57b0e03087c9ccb53f25fc978d"
+  },
+  {
+    "path": "bot/booking_service.py",
+    "status": "modified",
+    "sha256": "a415ed3459529460f29189e433ea49dc4c6a4345b7c1a6ef2efab09aab83fa9e"
+  },
+  {
+    "path": "bot/customer_price_service.py",
+    "status": "modified",
+    "sha256": "d68200d2ec752e1a183bdc6951c7a19999279fa535010822221692860bc7298b"
+  },
+  {
+    "path": "bot/handlers.py",
+    "status": "modified",
+    "sha256": "85ef1abc2a71e2c31e808d8bc4fd3d8b315131f089ae5aea6eb9fbe35d469364"
+  },
+  {
+    "path": "bot/keyboards.py",
+    "status": "modified",
+    "sha256": "5c2e21807ae8fbc2df783191a0a3b7cc5826ae153bb4a06795a6eda822d5e900"
+  },
+  {
+    "path": "bot/order_service.py",
+    "status": "modified",
+    "sha256": "a8083cd755d5be77988ad1e17ab41105162b5a0e421aad1407adb51c29be3d73"
+  },
+  {
+    "path": "bot/parallel_orders.py",
+    "status": "modified",
+    "sha256": "36b375a6605ee7e5b688c7dbac1c006ef0351e9f331dca88c9fbf83025365c02"
+  },
+  {
+    "path": "bot/passenger_queue.py",
+    "status": "modified",
+    "sha256": "b39f2eec15b52f6031b7bd7c8d59999423b7a2c565a8c13d4de805ea008bd792"
+  },
+  {
+    "path": "bot/push_service.py",
+    "status": "modified",
+    "sha256": "9da17a9e8c223a23c49022f73c4a5154e37bb36e4ef28233b17c741a1b68e221"
+  },
+  {
+    "path": "bot/states_service.py",
+    "status": "modified",
+    "sha256": "497d33d3fc641efa3af77e4ac16a6123c5db3be8f4903c53a43b5a5c7ca534ab"
+  },
+  {
+    "path": "common/driver_app_state.py",
+    "status": "modified",
+    "sha256": "26f8e4076111ee00d173a76c44a83735116aef50c08cdb8f6288798d48905252"
+  },
+  {
+    "path": "common/models.py",
+    "status": "modified",
+    "sha256": "02f9f6c6ca659172cdad7c68039c3436f0469fa8f7c8381b66213ff777dd7103"
+  },
+  {
+    "path": "migrations/versions/0059_driver_blacklist.py",
+    "status": "added",
+    "sha256": "9e2e5da428764bf6fd21f52d58848cf75e180f91e099adc43a42d80e463c0c95"
+  },
+  {
+    "path": "qa_v188/arrival-tests.log",
+    "status": "added",
+    "sha256": "1072053eaa5b8ebb479a79b3dbba926290614e5ef4b8357a81fed308c1f7a51e"
+  },
+  {
+    "path": "qa_v188/baseline.log",
+    "status": "added",
+    "sha256": "a04b883ad77d911f272f44c552fb9171eaefe04153935d8210041215d4918470"
+  },
+  {
+    "path": "qa_v188/dependency-install.log",
+    "status": "added",
+    "sha256": "aef356df889126f1d66b904167b5d5e407080276d864b42b73b82926a4a368d0"
+  },
+  {
+    "path": "qa_v188/full-after.log",
+    "status": "added",
+    "sha256": "816a4d2934e6006a135904702e4b2250012ec8a174e810a96b8a8140fe152852"
+  },
+  {
+    "path": "qa_v188/new-tests.log",
+    "status": "added",
+    "sha256": "ec43ff5d46a8fc4bc1606da1e02060c28cd6e8a51069f613262887a078670faa"
+  },
+  {
+    "path": "tests/test_v188_eta_blacklist.py",
+    "status": "added",
+    "sha256": "7c1f2cce05abef1d3d2a38dde0371e327d5e6e9cf9319edfb6e846b238114866"
+  }
+]

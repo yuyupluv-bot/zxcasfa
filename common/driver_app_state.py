@@ -11,9 +11,9 @@ import os
 from common.models import User, Order, State, OutboxMessage, ScheduledJob, DriverQueue, Setting, DriverAppCommand
 from common import time_utils
 
-COMMANDS = frozenset('''driver_online driver_offline driver_away choose_line set_line leave_line stay_line change_line queue who_online driver_car car_edit car_back driver_gender set_driver_gender driver_settings driver_settings_back accept decline decline_reason decline_back set_eta eta_pick eta_custom eta_add_menu eta_add eta_add_custom arrived seated bought finish driver_cancel_active driver_cancel_back driver_cancel_no_show driver_cancel_customer driver_cancel_car waiting_start waiting_stop parallel_orders parallel_back parallel_take route_parallel_take parallel_route_decline parallel_eta parallel_eta_custom parallel_eta_add parallel_eta_add_custom parallel_decline pending_orders pending_take chat_take chat_depart chat_add booking_take booking_depart booking_driver_cancel bookings_taken skip_rate_passenger rate_passenger skip propose_price'''.split())
+COMMANDS = frozenset('''driver_online driver_offline driver_away choose_line set_line leave_line stay_line change_line queue who_online driver_car car_edit car_back driver_gender set_driver_gender driver_settings driver_settings_back accept offer_eta offer_eta_custom blacklist_rating decline decline_reason decline_back set_eta eta_pick eta_custom eta_add_menu eta_add eta_add_custom arrived seated bought finish driver_cancel_active driver_cancel_back driver_cancel_no_show driver_cancel_customer driver_cancel_car waiting_start waiting_stop parallel_orders parallel_back parallel_take route_parallel_take parallel_route_decline parallel_eta parallel_eta_custom parallel_eta_add parallel_eta_add_custom parallel_decline pending_orders pending_take chat_take chat_depart chat_add booking_take booking_depart booking_driver_cancel bookings_taken skip_rate_passenger rate_passenger skip propose_price'''.split())
 INPUT_HINTS = {
- 'driver_eta':'Через сколько минут подъедете?', 'driver_eta_add':'Сколько минут добавить?',
+ 'driver_offer_eta':'Через сколько минут подъедете?', 'driver_eta':'Через сколько минут подъедете?', 'driver_eta_add':'Сколько минут добавить?',
  'driver_finish_price':'Итоговая стоимость поездки, ₽', 'driver_delivery_price':'Стоимость доставки, ₽',
  'driver_custom_price':'Предложите стоимость, ₽', 'driver_parallel_eta':'Время подачи параллельной заявки, мин',
  'driver_parallel_eta_add':'Добавить к подаче, мин', 'driver_rate_passenger_text':'Комментарий к оценке',
@@ -56,8 +56,12 @@ def project(session, driver):
         ((Order.driver_id==driver.id) & Order.status.in_(('assigned','arrived','in_progress','parallel_assigned'))) |
         ((Order.offered_driver_id==driver.id) & (Order.status=='searching')) |
         ((Order.parallel_driver_id==driver.id) & (Order.status=='parallel_assigned')) |
-        ((Order.parallel_offer_driver_id==driver.id) & Order.status.in_(('created','searching','chat_search')))
+        ((Order.parallel_offer_driver_id==driver.id) & Order.status.in_(('created','searching','chat_search','queued','no_drivers')))
     ).order_by(Order.id.asc()).all()
+    from bot import blacklist_service
+    orders = [order for order in orders
+              if order.driver_id == driver.id or order.parallel_driver_id == driver.id
+              or not blacklist_service.blocks(session, driver.id, order.passenger_id)]
     serialized=[]
     for order in orders:
         serialized.append({'id':order.id,'number':order.number,'status':order.status,'kind':order.order_type,
@@ -94,7 +98,7 @@ def project(session, driver):
             if inline and (not oid or (int(oid) not in ids and payload.get('cmd') not in ('parallel_take','pending_take','chat_take','booking_take','booking_depart','booking_driver_cancel'))): continue
             if oid and payload.get('cmd') not in ('booking_take','booking_depart','booking_driver_cancel','parallel_take','pending_take','chat_take') and int(oid) not in ids:
                 # Post-ride rating/skip remains valid only while its pointer is open.
-                if payload.get('cmd') not in ('rate_passenger','skip_rate_passenger'): continue
+                if payload.get('cmd') not in ('rate_passenger','skip_rate_passenger','blacklist_rating'): continue
                 rating=session.get(Order,int(oid))
                 if not rating or rating.driver_id!=driver.id or not rating.driver_rating_prompt_outbox_id: continue
             key=canonical(payload)
@@ -104,7 +108,10 @@ def project(session, driver):
         if key not in seen:seen.add(key);actions.append({'label':label,'payload':payload,'danger':False})
     offer=next((o for o in orders if o.offered_driver_id==driver.id),None)
     if offer and current_state!='driver_decline_reason':
-        add('Принять заявку','accept',order_id=offer.id);add('Отказаться','decline',order_id=offer.id)
+        for minutes in (1, 3, 5, 10, 15, 25):
+            add(f'{minutes} мин', 'offer_eta', order_id=offer.id, minutes=minutes)
+        add('Индивидуальное время', 'offer_eta_custom', order_id=offer.id)
+        add('Отказаться','decline',order_id=offer.id)
     if not orders and current_state in ('driver_menu','driver_on_line','main_menu','start'):
         add('Вернуться на линию' if driver.driver_status=='away' else 'На линию','driver_online')
         add('Выбрать линию','choose_line');add('Очередь','queue')
@@ -117,7 +124,11 @@ def project(session, driver):
     permitted=driver.role=='driver' and driver.has_role('driver') and not driver.is_blocked
     if not permitted:actions=[]
     deadlines={t['order_id'] for t in timers if t['kind']=='accept' and t['due']}
-    actions=[a for a in actions if not(a['payload'].get('cmd')=='accept' and a['payload'].get('order_id') in deadlines)]
+    actions=[a for a in actions if not(a['payload'].get('cmd') in ('accept','offer_eta','offer_eta_custom') and a['payload'].get('order_id') in deadlines)]
+    parallel_deadlines={t['order_id'] for t in timers if t['kind']=='route_parallel_offer' and t['due']}
+    actions=[a for a in actions if not(a['payload'].get('cmd') in
+        ('parallel_eta','parallel_eta_custom','parallel_take','route_parallel_take')
+        and a['payload'].get('order_id') in parallel_deadlines)]
     version_data={'state':current_state,'data':state.data if state else '{}',
       'driver':[driver.role,driver.driver_status,driver.is_on_line,driver.current_line],
       'orders':serialized,'timers':timers,'actions':actions,

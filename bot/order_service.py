@@ -1,6 +1,8 @@
 """High-level order lifecycle helpers shared by handlers and timers."""
 from __future__ import annotations
 
+from . import blacklist_service
+
 import datetime as dt
 import json
 import re
@@ -476,7 +478,8 @@ def has_eligible_waiting_driver(session: Session, order: Order) -> bool:
     return queue_service.has_waiting_driver(
         session,
         pickup_line,
-        exclude_driver_ids=_declined_ids(session, order),
+        exclude_driver_ids=sorted(set(_declined_ids(session, order)) |
+                                  blacklist_service.excluded_driver_ids(session, order.passenger_id)),
         line_scope=line_scope,
     )
 
@@ -526,6 +529,10 @@ def offer_to_selected_driver(session: Session, order: Order, driver: User) -> bo
     from . import parallel_orders
     if not parallel_orders.local_line_allows(order, driver):
         return False
+    if blacklist_service.blocks(session, driver.id, order.passenger_id):
+        return False
+
+
     entry.status = "offered"
     order.status = "searching"
     _set_current_offer(session, order, driver.id)
@@ -539,15 +546,14 @@ def offer_to_selected_driver(session: Session, order: Order, driver: User) -> bo
     )
 
     text = (
-        f"🔔 Персональная заявка #{order.number} ({order_type_label(order)})\n"
-        f"Пассажир выбрал вас.\nВаша заявка: {order_text(order)}"
+        f"📌 {order_text(order)}\n\nПассажир выбрал вас."
     )
     if order.customer_price is not None:
         text += f"\n💰 Цена клиента: {float(order.customer_price):.0f} ₽"
     creator = session.get(User, order.passenger_id)
     if creator:
         full_name = creator.full_name or ("id" + str(creator.vk_id))
-        text += "\n👤 От кого: [id%s|%s] %s" % (
+        text += "\nОт кого: [id%s|%s] %s" % (
             creator.vk_id, full_name, passenger_rating_text(creator)
         )
     if order.actuality_confirmed:
@@ -575,11 +581,9 @@ def offer_to_selected_driver(session: Session, order: Order, driver: User) -> bo
     from . import push_service
     push_event = "customer_price" if order.customer_price is not None and not order.dispatcher_id else ("dispatcher_order" if order.dispatcher_id else "new_order")
     push_service.send(session, driver.id, push_event, order)
-    timeout = (
-        30
-        if order.customer_price is not None and not order.dispatcher_id
-        else get_int(session, "driver_accept_timeout", 60)
-    )
+    order.eta_offer_source = "fifo"
+    order.eta_offer_expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=60)
+    timeout = 60
     order_id = order.id
     driver_id = driver.id
     timers.schedule(
@@ -620,13 +624,17 @@ def offer_to_next_driver(
             locked_order.status == "searching"
             and locked_order.offered_driver_id is not None
         )
+        or (getattr(locked_order, "eta_offer_source", None) in
+            ("parallel", "parallel_chat", "parallel_auto")
+            and locked_order.parallel_offer_driver_id is not None)
     ):
         return False
     order = locked_order
     # The previous driver no longer holds this request: drop their notices.
     clear_offer_notice(session, order)
     declined = _declined_ids(session, order)
-    excluded = set(declined) | set(temporary_exclude_driver_ids or ())
+    excluded = (set(declined) | set(temporary_exclude_driver_ids or ())
+                | blacklist_service.excluded_driver_ids(session, order.passenger_id))
     from . import parallel_orders
     pickup_line = parallel_orders.free_line_city(order) or "Горнозаводск"
     route_city = parallel_orders.route_priority_city(order)
@@ -681,7 +689,7 @@ def offer_to_next_driver(
         driver.id,
     )
 
-    text = f"🔔 Новая заявка #{order.number} ({order_type_label(order)})\nВаша заявка: {order_text(order)}"
+    text = f"📌 {order_text(order)}\n"
     if order.customer_price is not None:
         text += f"\n💰 Цена клиента: {float(order.customer_price):.0f} ₽"
     if order.actuality_confirmed:
@@ -695,7 +703,7 @@ def offer_to_next_driver(
         text += f"\nПричина отказа предыдущего водителя: {reason_title}"
     if creator and not _is_dispatcher_order(order):
         _full = creator.full_name or ("id" + str(creator.vk_id))
-        text += "\n👤 От кого: [id%s|%s] %s" % (
+        text += "\nОт кого: [id%s|%s] %s" % (
             creator.vk_id, _full, passenger_rating_text(creator)
         )
     if order.comment:
@@ -734,11 +742,9 @@ def offer_to_next_driver(
 
     # If the driver ignores the offer for the admin-configured interval, remove
     # them from the line immediately so they cannot delay following requests.
-    timeout = (
-        30
-        if order.customer_price is not None and not order.dispatcher_id
-        else get_int(session, "driver_accept_timeout", 60)
-    )
+    order.eta_offer_source = "fifo"
+    order.eta_offer_expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=60)
+    timeout = 60
     order_id = order.id
     driver_id = driver.id
     timers.schedule(
@@ -773,7 +779,19 @@ def _accept_timeout(order_id: int, driver_id: int) -> None:
             return
         current = _current_offer(session, order)
         if current != driver_id:
-            return  # already moved on
+            return  # already moved on; never reschedule another driver's offer
+        deadline = getattr(order, "eta_offer_expires_at", None)
+        if deadline is not None:
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=dt.timezone.utc)
+            remaining = (deadline - dt.datetime.now(dt.timezone.utc)).total_seconds()
+            if remaining > 0:
+                # A stale/early callback is not successful expiry. Replace it
+                # with the remaining window, including its persistent job, so
+                # _safe_run cannot consume the only watchdog recovery record.
+                timers.schedule("accept", order.id, remaining,
+                                lambda: _accept_timeout(order_id, driver_id))
+                return
         driver = session.get(User, driver_id)
         if driver:
             driver.driver_missed_offers = (driver.driver_missed_offers or 0) + 1
@@ -781,11 +799,7 @@ def _accept_timeout(order_id: int, driver_id: int) -> None:
             queue_service.leave_queue(session, driver)
             driver.is_on_line = False
             driver.driver_status = "offline"
-            timeout_seconds = (
-                30
-                if order.customer_price is not None and not order.dispatcher_id
-                else get_int(session, "driver_accept_timeout", 60)
-            )
+            timeout_seconds = 60
             timeout_text = (
                 f"Вы не ответили на заявку за {timeout_seconds} секунд. "
                 "Вас сняли с линии."
@@ -837,17 +851,6 @@ def _accept_timeout(order_id: int, driver_id: int) -> None:
                     passenger_text,
                     keyboard=passenger_keyboard,
                 )
-            from . import passenger_queue
-            passenger_queue.try_promote(session)
-            return
-        # Passenger-priced and dispatcher-created orders get one ordinary
-        # offer first. Only after the driver ignores it do they become a
-        # shared-chat request addressed to all drivers.
-        from . import parallel_orders
-        if (order.customer_price is not None or order.dispatcher_id) and not parallel_orders.local_village_line(order):
-            order.status = "created"
-            session.flush()
-            publish_direct_to_requests_chat(session, order)
             from . import passenger_queue
             passenger_queue.try_promote(session)
             return

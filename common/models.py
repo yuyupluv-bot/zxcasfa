@@ -238,6 +238,9 @@ class DriverSelection(Base):
 class Order(Base):
     __tablename__ = "orders"
 
+    eta_offer_source = Column(String(20), nullable=True)
+    eta_offer_expires_at = Column(DateTime(timezone=True), nullable=True)
+
     id = Column(Integer, primary_key=True)
     # Public number shown to passengers/drivers/admins. It is intentionally
     # independent from the permanent database primary key, so monthly reset
@@ -780,3 +783,12 @@ class DriverAppCommand(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
     finished_at = Column(DateTime(timezone=True))
     __table_args__ = (UniqueConstraint('driver_id','request_id',name='uq_driver_app_request'),)
+
+
+class DriverBlacklist(Base):
+    __tablename__ = "driver_blacklist"
+    id = Column(Integer, primary_key=True)
+    driver_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    passenger_vk_id = Column(BigInteger, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
+    __table_args__ = (UniqueConstraint("driver_id", "passenger_vk_id", name="uq_driver_blacklist_pair"),)

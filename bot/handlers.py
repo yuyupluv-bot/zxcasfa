@@ -33,6 +33,8 @@ from common.models import (
     BlockedUser,
     Booking,
     City,
+    DriverBlacklist,
+    ScheduledJob,
     DriverQueue,
     DriverSelection,
     DriverAppPairCode,
@@ -43,6 +45,7 @@ from common.models import (
     User,
 )
 
+from . import blacklist_service
 from common import audit
 from common import time_utils
 from common.settings_service import button_label, get_cached, get_int, msg, set_setting
@@ -287,16 +290,19 @@ _DRIVER_MENU_CMDS = {
     "choose_line", "set_line", "leave_line", "change_line", "stay_line",
     "driver_away", "driver_car", "earnings", "reviews",
     "fake_calls", "driver_statistics", "driver_online", "driver_offline",
-    "pending_orders", "driver_info",
+    "pending_orders", "driver_info", "blacklist", "blacklist_add",
+    "blacklist_remove_menu", "blacklist_remove", "blacklist_close",
 }
-# V21 baseline was: _DRIVER_OFFER_ALLOWED_CMDS = {"accept", "decline", "decline_reason", "decline_back"}
-_DRIVER_OFFER_ALLOWED_CMDS = {"accept", "decline", "decline_reason", "decline_back"}
+# Ordinary offer decisions; unrelated menu commands stay locked.
+_DRIVER_OFFER_ALLOWED_CMDS = {"accept", "decline", "decline_reason", "decline_back", "offer_eta", "offer_eta_custom"}
 
 # The selected UI role may change while a driver still has a durable input
 # state (for example, a person has both Driver and Dispatcher roles).  These
 # states always belong to the driver's active workflow and must never be sent
 # to the dispatcher handler just because the menu role changed in the meantime.
 _DRIVER_OWNED_INPUT_STATES = {
+    States.D_OFFER_ETA,
+    States.D_BLACKLIST_ADD,
     States.D_DELIVERY_PRICE,
     States.D_CUSTOM_PRICE,
     States.D_CAR_MODEL,
@@ -1278,7 +1284,8 @@ def show_direct_driver_choices(session: Session, user: User, page=1) -> None:
     if active_order_for(session, user):
         return _menu_lock_notice(session, user)
     _close_direct_driver_choice_menu(session, user)
-    drivers = _direct_driver_candidates(session)
+    excluded = blacklist_service.excluded_driver_ids(session, user.id)
+    drivers = [driver for driver in _direct_driver_candidates(session) if driver.id not in excluded]
     visible = drivers[:DIRECT_DRIVER_PAGE_SIZE]
     if visible:
         text_lines = ["👤 Выбор водителя:", ""]
@@ -1439,6 +1446,7 @@ def select_direct_driver(session: Session, user: User, driver_id) -> None:
     available = bool(
         entry and entry.status == "waiting"
         and driver and driver.has_role(ROLE_DRIVER)
+        and not blacklist_service.blocks(session, driver.id, user.id)
         and driver.is_on_line and driver.driver_status == "online"
         and not driver.is_blocked and lines.has_complete_car(driver)
         and not active_order_for(session, driver, as_driver=True)
@@ -2864,7 +2872,7 @@ def passenger_departure_response(
     order.departure_prompt_outbox_id = None
     if cancel:
         return passenger_cancel(session, user, order.id)
-    if order.status in ("assigned", "parallel_assigned"):
+    if not parallel and order.status in ("assigned", "parallel_assigned"):
         # Persist the exact message id; arrival will delete this message only.
         order.enroute_notice_outbox_id = vk.send_tracked_message(user.vk_id, "Машинка в пути")
     order.actuality_confirmed = True
@@ -3364,6 +3372,11 @@ def handle_driver(session, user, state, text, payload, attachments):
     # as an unrelated menu action and the driver sees no result.
     if state == States.D_CUSTOM_PRICE and not cmd:
         return customer_price_service.submit(session, user, text)
+    if state == States.D_OFFER_ETA and not cmd:
+        return accept_offer_eta(session, user, get_data(session, user.vk_id).get("order_id"), text)
+    if state == States.D_BLACKLIST_ADD and (cmd == "start" or text.casefold().strip() in ("меню", "начать", "/start", "start")):
+        reset(session, user.vk_id, States.D_MENU)
+        return show_main_menu(session, user)
 
     # Do not let an expired, already-idle «Суточник» rejoin the line during
     # the worker's short polling interval. Active/offered rides are deferred.
@@ -3426,6 +3439,29 @@ def handle_driver(session, user, state, text, payload, attachments):
         return lines.show_line_menu(session, user)
     if cmd == "contact_dispatcher":
         return driver_contact_dispatcher(session, user)
+    if cmd == "blacklist":
+        return show_blacklist(session, user)
+    if cmd == "blacklist_add":
+        set_state(session, user.vk_id, States.D_BLACKLIST_ADD, {}, merge=False)
+        return vk.send_message(user.vk_id, "Пришлите ссылку на страницу клиента в VK (https://vk.ru/id123 или короткое имя).",
+                               keyboard=kb.blacklist_menu())
+    if cmd == "blacklist_remove_menu":
+        return show_blacklist_remove(session, user, payload.get("page", 1))
+    if cmd == "blacklist_remove":
+        return remove_blacklist(session, user, payload.get("vk_id"), payload.get("page", 1))
+    if cmd == "blacklist_close":
+        close_blacklist_remove(session, user)
+        return show_blacklist(session, user)
+    if cmd == "blacklist_rating":
+        return blacklist_from_rating(session, user, payload.get("order_id"))
+    if cmd == "offer_eta":
+        return accept_offer_eta(session, user, payload.get("order_id"), payload.get("minutes"))
+    if cmd == "offer_eta_custom":
+        return offer_eta_custom(session, user, payload.get("order_id"))
+    if state == States.D_BLACKLIST_ADD and not cmd:
+        return add_blacklist_link(session, user, text)
+
+
     if cmd == "rate_passenger":
         return driver_rate_passenger(session, user, payload["order_id"], payload["stars"])
     if cmd == "skip_rate_passenger":
@@ -3481,7 +3517,7 @@ def handle_driver(session, user, state, text, payload, attachments):
             session, user, payload.get("order_id")
         )
     if cmd == "accept":
-        return driver_accept(session, user, payload["order_id"])
+        return offer_eta_custom_or_menu(session, user, payload.get("order_id"))
     if cmd == "set_eta":
         return driver_show_eta_menu(session, user)
     if cmd == "eta_pick":
@@ -4071,6 +4107,8 @@ def show_queue(session: Session, user: User, dispatcher_view: bool = False) -> N
 
 
 def show_driver_info(session: Session, user: User) -> None:
+    close_blacklist_remove(session, user)
+    reset(session, user.vk_id, States.D_MENU)
     """Show the saved car, payment details and review summary."""
     car = user.car_full if user.car_full and user.car_full != "—" else "не указано"
     payment = _payment_details_text(user) if _payment_details_ready(user) else "не указаны"
@@ -4128,6 +4166,7 @@ def _pending_orders_query(session: Session):
         Order.driver_id.is_(None),
         Order.parallel_driver_id.is_(None),
         Order.offered_driver_id.is_(None),
+        Order.parallel_offer_driver_id.is_(None),
     )
 
 
@@ -4141,7 +4180,8 @@ def show_pending_orders(session: Session, user: User, page=1) -> None:
         page = 1
     query = _pending_orders_query(session)
     visible = [order for order in query.order_by(Order.created_at.asc(), Order.id.asc()).all()
-               if parallel_orders.local_line_allows(order, user)]
+               if parallel_orders.local_line_allows(order, user)
+               and not blacklist_service.blocks(session, user.id, order.passenger_id)]
     total = len(visible)
     total_pages = max(1, (total + PENDING_ORDERS_PER_PAGE - 1) // PENDING_ORDERS_PER_PAGE)
     page = min(page, total_pages)
@@ -4174,21 +4214,24 @@ def request_claim_actuality(
     session: Session, driver: User, order: Order, *, parallel: bool = False
 ) -> bool:
     """Reserve an old manual claim and ask its passenger before ETA."""
-    if order.dispatcher_id or order.actuality_confirmed or not _order_is_older_than_two_minutes(order):
+    if (order.dispatcher_id or order.actuality_confirmed
+            or delivery_service.is_partner_delivery(order)
+            or not claim_needs_actuality(order, parallel=parallel)):
         return False
     passenger = session.get(User, order.passenger_id)
     if not passenger:
         return False
-    text = (
-        "У нас есть водитель, который сейчас довозит клиентов и затем выезжает к вам. "
-        "При отмене после перехода водителя к заявке или спустя 2 минуты после её принятия будет ложный вызов. "
-        "Вы ждёте машинку?"
-        if parallel else
-        "Появился водитель, который может взять вашу заявку. Она ещё актуальна?"
-    )
+    if parallel:
+        text = (
+            order_service.departure_driver_card_text(driver) + "\n"
+            f"Водитель завершает текущую поездку и будет у вас ориентировочно через {order.parallel_eta} мин."
+        )
+    else:
+        text = ("Появился водитель, который может взять вашу заявку. Она ещё актуальна?\n"
+                f"{order_service.order_text(order)}")
     order.chat_actuality_prompt_outbox_id = vk.send_tracked_message(
         passenger.vk_id,
-        f"{text}\n{order_service.order_text(order)}",
+        text,
         keyboard=(kb.parallel_actuality_keyboard(order.id)
                   if parallel else kb.chat_order_actual_keyboard(order.id)),
     )
@@ -4243,40 +4286,231 @@ def driver_take_pending(session: Session, user: User, order_id) -> None:
         user.is_on_line = True
         user.driver_status = "online"
 
-    previous_status = order.status
-    timers.cancel("accept", order.id)
+    reserve_eta_offer(session, user, order)
+
+
+def claim_needs_actuality(order: Order, *, parallel: bool = False) -> bool:
+    """Age at acceptance, not age when a delayed passenger answer arrives."""
+    created = getattr(order, "created_at", None)
+    accepted = (getattr(order, "parallel_accepted_at", None) if parallel
+                else getattr(order, "driver_accept_time", None)) or time_utils.now()
+    if not created:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=dt.timezone.utc)
+    if accepted.tzinfo is None:
+        accepted = accepted.replace(tzinfo=dt.timezone.utc)
+    return (accepted - created).total_seconds() > 120
+
+
+def offer_deadline_passed(session: Session, order: Order) -> bool:
+    deadline = getattr(order, "eta_offer_expires_at", None)
+    if deadline is not None:
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=dt.timezone.utc)
+        return time_utils.now() >= deadline
+    job = session.query(ScheduledJob).filter(
+        ScheduledJob.job_key == f"accept:{order.id}",
+        ScheduledJob.status == "pending",
+    ).one_or_none()
+    # Missing timer is not permission to accept an unbounded/stale offer.
+    if job is None:
+        log.warning("Refused offer without durable deadline order=%s", order.id)
+        return True
+    deadline = job.run_at
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=dt.timezone.utc)
+    return time_utils.now() >= deadline
+
+
+def _live_eta_offer(session: Session, user: User, order_id) -> Order | None:
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
+        return None
+    order = session.query(Order).filter(Order.id == order_id).with_for_update().one_or_none()
+    if (not order or order.status != "searching" or order.offered_driver_id != user.id
+            or order.driver_id is not None or order.parallel_driver_id is not None
+            or offer_deadline_passed(session, order)):
+        return None
+    if blacklist_service.blocks(session, user.id, order.passenger_id):
+        return None
+    return order
+
+
+def offer_eta_custom_or_menu(session: Session, user: User, order_id) -> None:
+    order = _live_eta_offer(session, user, order_id)
+    if not order:
+        return vk.send_message(user.vk_id, "Заявка уже недоступна или время ответа истекло.")
+    return vk.send_message(user.vk_id, "Через сколько минут будете у клиента?",
+                           keyboard=kb.order_offer_keyboard(order.id, order.customer_price is not None))
+
+
+def offer_eta_custom(session: Session, user: User, order_id) -> None:
+    order = _live_eta_offer(session, user, order_id)
+    if not order:
+        return vk.send_message(user.vk_id, "Заявка уже недоступна или время ответа истекло.")
+    # Do not cancel or extend the original 60-second deadline while typing.
+    set_state(session, user.vk_id, States.D_OFFER_ETA, {"order_id": order.id}, merge=False)
+    vk.send_message(user.vk_id, "Введите целое число минут до прибытия (от 1 до 1440). Время на ответ — 60 секунд с получения заявки.")
+
+
+def accept_offer_eta(session: Session, user: User, order_id, value) -> None:
+    order = _live_eta_offer(session, user, order_id)
+    if not order:
+        return vk.send_message(user.vk_id, "Заявка уже недоступна или время ответа истекло.")
+    raw = str(value or "").strip()
+    if not re.fullmatch(r"[0-9]{1,4}(?:\s*мин\.?)?", raw, flags=re.IGNORECASE):
+        return vk.send_message(user.vk_id, "Введите целое число минут от 1 до 1440.")
+    eta = int(re.match(r"[0-9]+", raw).group())
+    if not 1 <= eta <= 1440:
+        return vk.send_message(user.vk_id, "Введите целое число минут от 1 до 1440.")
+    return driver_accept(session, user, order.id, notify_passenger=False, selected_eta=eta)
+
+
+def reserve_eta_offer(session: Session, user: User, order: Order, *, source: str = "pending") -> None:
+    """Chat/pending tap is a reservation only; the original FIFO timer owns expiry."""
+    if order.offered_driver_id == user.id and order.status == "searching":
+        return offer_eta_custom_or_menu(session, user, order.id)
+    if (order.offered_driver_id or order.driver_id or order.parallel_driver_id
+            or (getattr(order, "eta_offer_source", None) in
+                ("parallel", "parallel_chat", "parallel_auto") and order.parallel_offer_driver_id)
+            or order.status not in PENDING_ORDER_STATUSES):
+        return vk.send_message(user.vk_id, "Заявку уже рассматривает другой водитель.")
+    if blacklist_service.blocks(session, user.id, order.passenger_id):
+        return vk.send_message(user.vk_id, "Заявка недоступна.")
+    previous = offered_order_for(session, user)
+    if previous and previous.id != order.id:
+        timers.cancel("accept", previous.id)
+        order_service.finalize_offer_message(session, previous, "Заявка передана следующему водителю.")
+        order_service.clear_current_offer(session, previous)
+        queue_service.release_offer(session, user)
+        session.flush()
+    was_offline = not bool(user.is_on_line)
+    if was_offline or user.driver_status == "away":
+        queue_service.join_queue(session, user, lines.city_id_by_name(session, user.current_line))
+        user.is_on_line = True
+        session.flush()
+    if not queue_service.mark_offered(session, user):
+        return vk.send_message(user.vk_id, "Сейчас заявка недоступна. Обновите меню.")
     timers.cancel("driver_chat", order.id)
     timers.cancel("dispatcher_unclaimed", order.id)
     passenger_queue.remove(session, order.id)
-    order.offered_driver_id = None
-    order.parallel_driver_id = None
-    order.driver_id = user.id
-    order.status = "assigned"
-    order.driver_accept_time = time_utils.now()
-    if order.customer_price is not None and order.agreed_price is None:
-        order.agreed_price = order.customer_price
-    order.chat_driver_was_offline = False
-    user.driver_missed_offers = 0
-    queue_service.mark_assigned(session, user)
-    if previous_status == "chat_search":
-        order_service.finalize_chat_order_notice(session, order, user)
-    audit.record(session, "driver_pending_take", f"order={order.id} driver={user.id}")
+    order.status = "searching"
+    order.offered_driver_id = user.id
+    order.eta_offer_source = source
+    order.chat_driver_was_offline = was_offline
+    order.eta_offer_expires_at = time_utils.now() + dt.timedelta(seconds=60)
+    set_state(session, user.vk_id, States.D_OFFER, {"order_id": order.id}, merge=False)
+    text = f"📌 {order_service.order_text(order)}\n"
+    passenger = session.get(User, order.passenger_id) if order.passenger_id else None
+    if passenger and not order.dispatcher_id:
+        text += f"\nОт кого: {_vk_label(passenger)} {order_service.passenger_rating_text(passenger)}"
+    if order.customer_price is not None:
+        text += f"\n💰 Цена клиента: {float(order.customer_price):.0f} ₽"
+    if order.comment:
+        text += f"\n💬 Комментарий: {order.comment}"
+    text += order_service._extras_summary(session, order)
+    order.offer_outbox_id = vk.send_tracked_message(
+        user.vk_id, text, keyboard=kb.order_offer_keyboard(order.id, order.customer_price is not None),
+        attachment=vk.prepare_voice_attachment(user.vk_id, order.voice_attachment))
+    if not order.offer_outbox_id:
+        raise RuntimeError("Could not enqueue driver ETA offer")
+    order_id, driver_id = order.id, user.id
+    timers.schedule("accept", order_id, 60, lambda: order_service._accept_timeout(order_id, driver_id))
+    if previous and previous.id != order.id:
+        order_service.offer_to_next_driver(session, previous, {user.id})
 
-    if request_claim_actuality(session, user, order, parallel=False):
+
+def close_blacklist_remove(session: Session, user: User) -> None:
+    data = get_data(session, user.vk_id)
+    pointer = data.get("blacklist_remove_outbox_id")
+    if pointer:
+        from . import outbox_service
+        outbox_service.finalize_tracked_message(session, pointer, "")
+        data.pop("blacklist_remove_outbox_id", None)
+        set_state(session, user.vk_id, States.D_MENU, data, merge=False)
+
+
+def _blacklist_clients(session: Session, user: User):
+    return session.query(DriverBlacklist.passenger_vk_id, User.full_name).outerjoin(
+        User, User.vk_id == DriverBlacklist.passenger_vk_id).filter(
+        DriverBlacklist.driver_id == user.id).order_by(DriverBlacklist.id.asc()).all()
+
+
+def show_blacklist(session: Session, user: User) -> None:
+    close_blacklist_remove(session, user)
+    reset(session, user.vk_id, States.D_MENU)
+    clients = _blacklist_clients(session, user)
+    text = "🚫 Ваш чёрный список:\n\n"
+    if not clients:
+        text += "Список пуст."
+    for vk_id, name in clients:
+        line = f"• [id{vk_id}|{name or ('id' + str(vk_id))}]\n"
+        if len(text) + len(line) > 3000:
+            vk.send_message(user.vk_id, text, keyboard=kb.blacklist_menu())
+            text = "🚫 Чёрный список (продолжение):\n\n"
+        text += line
+    vk.send_message(user.vk_id, text, keyboard=kb.blacklist_menu())
+
+
+def show_blacklist_remove(session: Session, user: User, page=1) -> None:
+    close_blacklist_remove(session, user)
+    clients = _blacklist_clients(session, user)
+    if not clients:
+        return show_blacklist(session, user)
+    pages = max(1, (len(clients) + 6) // 7)
+    try:
+        page = min(pages, max(1, int(page)))
+    except (TypeError, ValueError):
+        page = 1
+    pointer = vk.send_tracked_message(
+        user.vk_id, "Нажмите на клиента, чтобы убрать его из вашего чёрного списка:",
+        keyboard=kb.blacklist_remove_keyboard(clients[(page - 1) * 7:page * 7], page, pages))
+    set_state(session, user.vk_id, States.D_MENU,
+              {"blacklist_remove_outbox_id": pointer}, merge=False)
+
+
+def remove_blacklist(session: Session, user: User, vk_id, page=1) -> None:
+    try:
+        vk_id = int(vk_id)
+    except (TypeError, ValueError):
+        return show_blacklist_remove(session, user, page)
+    session.query(DriverBlacklist).filter_by(driver_id=user.id, passenger_vk_id=vk_id).delete()
+    session.flush()
+    vk.send_message(user.vk_id, "✅ Клиент убран из вашего чёрного списка.", keyboard=kb.blacklist_menu())
+    show_blacklist_remove(session, user, page)
+
+
+def add_blacklist_link(session: Session, user: User, text: str) -> None:
+    if not re.fullmatch(r"(?:https?://)?(?:(?:www|m)\.)?vk\.(?:ru|com)/[A-Za-z0-9_.]+/?(?:\?[^\s]*)?", text.strip(), re.IGNORECASE):
+        return vk.send_message(user.vk_id, "Нужна ссылка на личную страницу VK, например https://vk.ru/id123.",
+                               keyboard=kb.blacklist_menu())
+    vk_id = vk.resolve_user_id(text)
+    if not vk_id or vk_id <= 0 or vk_id == user.vk_id:
+        return vk.send_message(user.vk_id, "Не удалось найти клиента по этой ссылке. Проверьте ссылку и повторите.",
+                               keyboard=kb.blacklist_menu())
+    blacklist_service.add(session, user, vk_id)
+    vk.send_message(user.vk_id, "✅ Клиент добавлен в ваш чёрный список.")
+    show_blacklist(session, user)
+
+
+def blacklist_from_rating(session: Session, user: User, order_id) -> None:
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
         return
-
-    if delivery_service.is_delivery(order):
-        return delivery_service.request_price(session, user, order)
-    _show_eta_menu(
-        session,
-        user,
-        order,
-        intro=(
-            f"✅ Вы взяли заявку #{order.number} ({order_service.order_type_label(order)})\n"
-            f"{_order_requester_line(session, order)}\n"
-            f"Ваша заявка: {order_service.order_text(order)}"
-        ),
-    )
+    order = session.query(Order).filter(Order.id == order_id).with_for_update().one_or_none()
+    if (not order or order.driver_id != user.id or order.status != "completed"
+            or not order.driver_rating_prompt_outbox_id or order.dispatcher_id):
+        return
+    passenger = session.get(User, order.passenger_id) if order.passenger_id else None
+    if not passenger:
+        return
+    blacklist_service.add(session, user, passenger.vk_id)
+    _finish_rating_prompt(session, order, True, "🚫 Клиент добавлен в ваш чёрный список. Оценка не выставлена.")
+    # Rating is optional and non-blocking: preserve queue, current trip and FSM.
+    vk.send_message(user.vk_id, "✅ Клиент добавлен в ваш чёрный список. Оценка не выставлена.")
 
 
 def _commission_for_order(session: Session, order_id: int) -> float:
@@ -4413,6 +4647,7 @@ def driver_accept(
     *,
     notify_passenger: bool = True,
     reserved_price_offer: bool = False,
+    selected_eta: int | None = None,
 ) -> None:
     order = session.query(Order).filter(Order.id == order_id).with_for_update().one_or_none()
     if (not order or order.status not in ("searching", "created")
@@ -4423,12 +4658,19 @@ def driver_accept(
         return show_main_menu(session, user)
     if not parallel_orders.local_line_allows(order, user):
         return vk.send_message(user.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
-    # Requirement 5/7: a driver blocked for cancelling cannot take new orders.
-    if driver_block_service.is_blocked(user):
+    if blacklist_service.blocks(session, user.id, order.passenger_id):
+        return vk.send_message(user.vk_id, "Заявка недоступна.")
+    if selected_eta is not None and offer_deadline_passed(session, order):
+        return vk.send_message(user.vk_id, "Время ответа истекло. Заявка передаётся следующему водителю.")
+
+
+    from_chat = getattr(order, "eta_offer_source", None) == "chat"
+    # Preserve the existing chat-claim exceptions; ordinary FIFO checks stay intact.
+    if not from_chat and driver_block_service.is_blocked(user):
         vk.send_message(user.vk_id, msg(session, "msg_driver_blocked", until=driver_block_service.blocked_until_text(user)))
         return show_main_menu(session, user)
     # A historical/stale queue row must never let an incomplete car accept an offer.
-    if not reserved_price_offer and not lines.has_complete_car(user):
+    if not from_chat and not reserved_price_offer and not lines.has_complete_car(user):
         timers.cancel("accept", order.id)
         order_service.add_decline(session, order, user.id, "car_missing")
         order_service.finalize_offer_message(
@@ -4464,7 +4706,7 @@ def driver_accept(
         )
         return order_service.offer_to_next_driver(session, order)
     # Req 1.1: a driver must be on a line to accept orders.
-    if not reserved_price_offer and (not user.is_on_line or not user.current_line):
+    if not from_chat and not reserved_price_offer and (not user.is_on_line or not user.current_line):
         vk.send_message(user.vk_id, msg(session, "msg_need_line"), keyboard=kb.driver_menu(on_line=False, show_role_switch=can_switch_role(user)))
         return
     timers.cancel("accept", order.id)
@@ -4477,8 +4719,20 @@ def driver_accept(
         order.agreed_price = order.customer_price
     user.driver_missed_offers = 0
     queue_service.mark_assigned(session, user)
-    order_service.finalize_offer_message(session, order, "✅ Вы приняли заявку.")
+    if selected_eta is None:
+        order_service.finalize_offer_message(session, order, "✅ Вы приняли заявку.")
     audit.record(session, "driver_accept", f"order={order.id} driver={user.id}")
+    if selected_eta is not None:
+        if order.chat_notice_outbox_id:
+            order_service.finalize_chat_order_notice(session, order, user)
+        # Store the driver's choice while an old request awaits its passenger.
+        order.arrival_eta = selected_eta
+        if claim_needs_actuality(order) or delivery_service.is_delivery(order):
+            order_service.finalize_offer_message(session, order, f"⏰ Вы выбрали {selected_eta} мин.")
+        if request_claim_actuality(session, user, order):
+            return
+        if not delivery_service.is_delivery(order):
+            return _apply_eta(session, user, order, selected_eta)
     # V76: the passenger hears about the driver right after the accept press.
     if notify_passenger:
         order_service.notify_driver_found(session, order)
@@ -4682,9 +4936,19 @@ def driver_decline(session: Session, user: User, order_id: int, cat: str) -> Non
                 keyboard=kb.order_offer_keyboard(order.id, customer_price_service.has_price(order)),
                 attachment=vk.prepare_voice_attachment(user.vk_id, order.voice_attachment),
             )
+            # Preserve the original offer window; retrying a chat handoff
+            # must neither extend it nor use an unrelated legacy setting.
+            now = time_utils.now()
+            deadline = order.eta_offer_expires_at
+            if deadline is None:
+                deadline = now + dt.timedelta(seconds=60)
+                order.eta_offer_expires_at = deadline
+            elif deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=dt.timezone.utc)
+            order_id, driver_id = order.id, user.id
             timers.schedule(
-                "accept", order.id, get_int(session, "driver_accept_timeout", 60),
-                lambda: order_service._accept_timeout(order.id, user.id),
+                "accept", order_id, max(0.0, (deadline - now).total_seconds()),
+                lambda: order_service._accept_timeout(order_id, driver_id),
             )
             return
         passenger_queue.remove(session, order.id)
@@ -4988,7 +5252,7 @@ def _apply_eta(session: Session, user: User, order: Order, eta: int) -> None:
 
     # Remove the time-choice buttons from the original message immediately.
     order_service.finalize_offer_message(
-        session, order, f"✅ Выбрано время прибытия: {eta} мин."
+        session, order, f"⏰ Вы выбрали {eta} мин."
     )
     order.arrival_eta = eta
     if order.driver_departed_at is None:
@@ -5033,6 +5297,8 @@ def _apply_eta(session: Session, user: User, order: Order, eta: int) -> None:
                 _driver_card(user) if is_partner_delivery
                 else order_service.departure_driver_card_text(assigned_driver)
             )
+            if not claim_needs_actuality(order):
+                order.actuality_confirmed = True
             if order.actuality_confirmed:
                 order.departure_prompt_outbox_id = None
                 vk.send_message(
@@ -7797,6 +8063,8 @@ def driver_take_from_chat(session: Session, user: User, order_id) -> None:
     from . import parallel_orders
     if not parallel_orders.local_line_allows(order, user):
         return vk.send_message(user.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
+    if blacklist_service.blocks(session, user.id, order.passenger_id):
+        return vk.send_message(user.vk_id, "Заявка недоступна.")
     active = active_order_for(session, user, as_driver=True)
     if active and active.id != order.id:
         if parallel_orders.has_pending(session, user):
@@ -7830,102 +8098,17 @@ def driver_take_from_chat(session: Session, user: User, order_id) -> None:
         _chat_claim_reply(session, user, f"заявка №{order.number} уже закрыта.")
         log.warning("Chat claim rejected: order=%s status=%s", order.id, order.status)
         return vk.send_message(user.vk_id, "Заявка уже недоступна.")
-    # A live offer must not block the chat: it is handed to the next driver
-    # right after this request is locked onto the current one.
-    pending_offer = offered_order_for(session, user)
-    if pending_offer is not None and pending_offer.id == order.id:
-        pending_offer = None
-    if pending_offer is not None:
-        timers.cancel("accept", pending_offer.id)
-        pending_offer.offered_driver_id = None
-        queue_service.release_offer(session, user)
-        reset(session, user.vk_id, States.D_MENU)
-        session.flush()
-    # Incomplete car details are only a reminder now: they must never cancel a
-    # claim and leave the request hanging in the chat.
+    if blacklist_service.blocks(session, user.id, order.passenger_id):
+        return vk.send_message(user.vk_id, "Заявка недоступна.")
+    # A public chat tap only reserves the offer. ETA confirms it within 60 seconds.
+    if order.offered_driver_id and order.offered_driver_id != user.id:
+        return vk.send_message(user.vk_id, "Заявку уже рассматривает другой водитель.")
     if not lines.has_complete_car(user):
-        vk.send_message(
-            user.vk_id,
-            "Заявка закреплена за вами. Пожалуйста, заполните «Моя машина»: марка, цвет и госномер.",
-        )
-        log.warning("Chat claim with incomplete car order=%s driver=%s", order.id, user.id)
-    was_offline = not bool(user.is_on_line)
-    if was_offline or user.driver_status == "away":
-        queue_service.join_queue(session, user, lines.city_id_by_name(session, user.current_line))
-        user.is_on_line = True
-    timers.cancel("driver_chat", order.id)
-    timers.cancel("dispatcher_unclaimed", order.id)
-    timers.cancel("accept", order.id)
-    passenger_queue.remove(session, order.id)
-    chat_outbox_id = order.chat_notice_outbox_id
-    order.offered_driver_id = None
-    order.driver_id = user.id
-    order.status = "assigned"
-    order.driver_accept_time = time_utils.now()
-    if order.customer_price is not None and order.agreed_price is None:
-        order.agreed_price = order.customer_price
-    order.chat_driver_was_offline = was_offline
-    user.driver_missed_offers = 0
-    queue_service.mark_assigned(session, user)
-    # Persist the assignment before any VK work: a failed edit or notification
-    # must never roll the claim back.
-    session.flush()
-    if pending_offer is not None:
-        log.warning(
-            "Offer %s released: driver %s claimed chat order %s",
-            pending_offer.id, user.id, order.id,
-        )
-        vk.send_message(
-            user.vk_id,
-            f"Заявка #{pending_offer.number} передана следующему водителю: вы взяли заявку №{order.number} из чата.",
-        )
-        try:
-            order_service.offer_to_next_driver(session, pending_offer)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("Could not re-offer order %s: %s", pending_offer.id, exc)
-    try:
-        order_service.finalize_chat_order_notice(session, order, user)
-    except Exception as exc:  # noqa: BLE001
-        log.exception("Chat notice finalize failed for order %s: %s", order.id, exc)
-    audit.record(session, "driver_chat_take", f"order={order.id} driver={user.id} chat_outbox={chat_outbox_id}")
-    passenger = session.get(User, order.passenger_id)
-    if _is_dispatcher_order(order):
-        # A dispatcher does not use the passenger confirmation FSM. The driver
-        # chooses ETA immediately; _apply_eta sends the dispatcher one complete
-        # notification with driver, order and arrival time.
-        _show_eta_menu(
-            session,
-            user,
-            order,
-            intro=(
-                f"✅ Вы закрепили за собой диспетчерскую заявку №{order.number}.\n"
-                f"{_order_requester_line(session, order)}\n"
-                f"Ваша заявка: {order_service.order_text(order)}"
-            ),
-        )
-        return
-    if order_service.driver_chat_reason_label(session, order):
-        _show_eta_menu(
-            session,
-            user,
-            order,
-            intro=(
-                f"✅ Вы взяли заявку №{order.number} из водительского чата.\n"
-                f"{_order_requester_line(session, order)}\n"
-                f"Ваша заявка: {order_service.order_text(order)}"
-            ),
-        )
-        return
-    if passenger:
-        order.chat_actuality_prompt_outbox_id = vk.send_tracked_message(
-            passenger.vk_id,
-            f"Водитель нашёлся. Ваша заявка актуальна?\n{order_service.order_text(order)}",
-            keyboard=kb.chat_order_actual_keyboard(order.id),
-        )
-        timers.schedule("chat_actual", order.id, 60, lambda: chat_actuality_timeout(order.id))
-        set_state(session, passenger.vk_id, States.P_CHAT_ORDER_CONFIRM, {"order_id": order.id}, merge=False)
-    vk.send_message(user.vk_id, "Ждём подтверждение актуальности заявки от пассажира.")
-    set_state(session, user.vk_id, States.D_CHAT_ORDER_WAIT, {"order_id": order.id}, merge=False)
+        vk.send_message(user.vk_id, "Пожалуйста, заполните «Моя машина»: марка, цвет и госномер.")
+    return reserve_eta_offer(session, user, order, source="chat")
+
+
+
 
 
 def passenger_chat_order_actual(session: Session, user: User, order_id, actual: bool) -> None:
@@ -7935,15 +8118,35 @@ def passenger_chat_order_actual(session: Session, user: User, order_id, actual: 
     if not order.chat_actuality_prompt_outbox_id:
         return
     timers.cancel("chat_actual", order.id)
+    parallel_confirmation = bool(getattr(order, "parallel_accepted_at", None)) or order.status == "parallel_assigned"
     if order.chat_actuality_prompt_outbox_id:
         from . import outbox_service
-        outbox_service.finalize_tracked_message(
-            session,
-            order.chat_actuality_prompt_outbox_id,
-            "✅ Вы ответили: заявка актуальна." if actual else "❌ Вы ответили: заявка неактуальна.",
-        )
+        if parallel_confirmation:
+            prompt = session.get(OutboxMessage, order.chat_actuality_prompt_outbox_id)
+            text = (prompt.text or "").rstrip() if prompt else ""
+            # A pending prompt from an older deployment may not yet contain
+            # the driver card. Upgrade it in place when its ETA is known.
+            if (actual and order.status == "parallel_assigned"
+                    and order.parallel_eta and order.parallel_driver_id
+                    and "Водитель завершает текущую поездку и будет у вас ориентировочно через " not in text):
+                card_driver = session.get(User, order.parallel_driver_id)
+                if card_driver:
+                    text = (order_service.departure_driver_card_text(card_driver) + "\n"
+                            f"Водитель завершает текущую поездку и будет у вас ориентировочно через {order.parallel_eta} мин.")
+            if not actual:
+                text = f"{text}\n❌ Заявка отменена.".lstrip()
+            outbox_service.finalize_tracked_message(
+                session, order.chat_actuality_prompt_outbox_id, text,
+                replace_text=True, defer_edit=True,
+                replacement_keyboard='{"buttons":[],"inline":true}',
+            )
+        else:
+            outbox_service.finalize_tracked_message(
+                session,
+                order.chat_actuality_prompt_outbox_id,
+                "✅ Вы ответили: заявка актуальна." if actual else "❌ Вы ответили: заявка неактуальна.",
+            )
         order.chat_actuality_prompt_outbox_id = None
-    parallel_confirmation = bool(getattr(order, "parallel_accepted_at", None)) or order.status == "parallel_assigned"
     driver_id = order.parallel_driver_id if order.status == "parallel_assigned" else order.driver_id
     driver = session.get(User, driver_id) if driver_id else None
     if not actual and parallel_confirmation:
@@ -8003,27 +8206,21 @@ def passenger_chat_order_actual(session: Session, user: User, order_id, actual: 
                 driver.vk_id,
                 "Клиент по параллельной заявке, ожидает на месте",
             )
-            if not getattr(order, "enroute_notice_outbox_id", None):
-                order.enroute_notice_outbox_id = vk.send_tracked_message(user.vk_id, "Машинка в пути")
-            vk.send_message(
-                user.vk_id,
-                "Спасибо! Водитель получил подтверждение и укажет время прибытия.",
-                keyboard=kb.passenger_waiting_keyboard(order.id),
-            )
-            set_state(session, user.vk_id, States.P_WAITING, {"order_id": order.id}, merge=False)
+            set_state(session, user.vk_id, States.P_IN_RIDE, {"order_id": order.id}, merge=False)
             if order.status == "parallel_assigned":
                 return parallel_orders.prompt_eta_after_actuality(session, driver, order)
             return driver_show_eta_menu(session, driver)
+        order.actuality_confirmed = True
         if delivery_service.is_delivery(order):
             vk.send_message(user.vk_id, "Водитель рассчитывает стоимость доставки.")
             return delivery_service.request_price(session, driver, order)
-        vk.send_message(
-            driver.vk_id,
-            f"Пассажир: {_vk_label(user)} подтвердил: заявка актуальна.\n"
-            f"Текст заявки: {order_service.order_text(order)}\n"
-            "Нажмите «Выезжаю».",
-            keyboard=kb.driver_depart_keyboard(order.id),
-        )
+        order.actuality_confirmed = True
+        if order.arrival_eta:
+            return _apply_eta(session, driver, order, order.arrival_eta)
+        else:
+            _show_eta_menu(session, driver, order,
+                           intro=f"Пассажир: {_vk_label(user)} подтвердил: заявка актуальна.\n"
+                                 f"📌 {order_service.order_text(order)}")
     vk.send_message(user.vk_id, "Спасибо! Водитель получил подтверждение.", keyboard=kb.passenger_waiting_keyboard())
     set_state(session, user.vk_id, States.P_IN_RIDE, {"order_id": order.id}, merge=False)
 
@@ -8088,7 +8285,6 @@ def driver_depart_from_chat_order(session: Session, user: User, order_id) -> Non
     order = session.get(Order, int(order_id)) if order_id else None
     if not order or order.driver_id != user.id or order.status != "assigned":
         return vk.send_message(user.vk_id, "Заявка уже недоступна.")
-    vk.send_message(user.vk_id, "Вы подтвердили выезд. Укажите время прибытия.")
     _show_eta_menu(session, user, order)
 
 
@@ -8118,6 +8314,9 @@ def driver_show_unclaimed_chat_requests(session: Session, user: User) -> None:
         .limit(30)
         .all()
     )
+    excluded = blacklist_service.excluded_driver_ids
+    orders = [order for order in orders if user.id not in excluded(session, order.passenger_id)]
+    bookings = [booking for booking in bookings if user.id not in excluded(session, booking.passenger_id)]
     if not orders and not bookings:
         vk.send_message(user.vk_id, "Сейчас нет заявок без водителя.")
         return

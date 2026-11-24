@@ -416,10 +416,7 @@ def parallel_actuality_keyboard(order_id: int) -> str:
 
 
 def driver_depart_keyboard(order_id: int) -> str:
-    return keyboard(
-        [[_btn("🚕 Выезжаю", GREEN, {"cmd": "chat_depart", "order_id": order_id})]],
-        inline=True,
-    )
+    return eta_keyboard([1, 3, 5, 10, 15, 25])
 
 
 def review_comment_keyboard(review_id: int) -> str:
@@ -524,9 +521,12 @@ def rating_keyboard(order_id: int) -> str:
 
 
 def passenger_rating_keyboard(order_id: int) -> str:
-    """Requirement 3: driver rates the passenger (1-5) after the ride."""
-    rows = [[_btn("⭐" * i, WHITE, {"cmd": "rate_passenger", "order_id": order_id, "stars": i})]
-            for i in range(5, 0, -1)]
+    """Keep blacklist on a separate row BELOW one star (VK inline: six rows)."""
+    def star(value):
+        return _btn("⭐" * value, WHITE,
+                    {"cmd": "rate_passenger", "order_id": order_id, "stars": value})
+    rows = [[star(5), star(4)], [star(3)], [star(2)], [star(1)]]
+    rows.append([_btn("🚫 Чёрный список", RED, {"cmd": "blacklist_rating", "order_id": order_id})])
     rows.append([_btn("Пропустить", WHITE, {"cmd": "skip_rate_passenger", "order_id": order_id})])
     return keyboard(rows, inline=True)
 
@@ -559,10 +559,7 @@ def driver_menu(
             _btn("🛡 Уйти с линии", RED, {"cmd": "driver_offline"}),
             _btn("☕ Отлучиться", WHITE, {"cmd": "driver_away"}),
         ])
-        rows.append([
-            _btn("💰 Мои доходы", WHITE, {"cmd": "earnings"}),
-            _btn("⭐ Мои отзывы", WHITE, {"cmd": "reviews"}),
-        ])
+        rows.append([_btn("📋 Мои сведения", WHITE, {"cmd": "driver_info"})])
     else:
         rows = [
             [
@@ -596,9 +593,35 @@ def driver_info_menu() -> str:
         [_btn("🚫 Ложные вызовы", WHITE, {"cmd": "fake_calls"})],
         [_btn("💰 Мои доходы", WHITE, {"cmd": "earnings"})],
         [_btn("⭐ Мои отзывы", WHITE, {"cmd": "reviews"})],
+        [_btn("🚫 Чёрный список", WHITE, {"cmd": "blacklist"})],
         [_btn("📱 Подключить приложение", BLUE, {"cmd": "connect_driver_app"})],
         [_btn("⬅️ Вернуться в главное меню", WHITE, {"cmd": "start"})],
     ])
+
+
+def blacklist_menu() -> str:
+    return keyboard([
+        [_btn("➕ Добавить в ЧС", WHITE, {"cmd": "blacklist_add"})],
+        [_btn("➖ Убрать из ЧС", WHITE, {"cmd": "blacklist_remove_menu"})],
+        [_btn("⬅️ Мои сведения", WHITE, {"cmd": "driver_info"})],
+    ])
+
+
+def blacklist_remove_keyboard(clients, page=1, pages=1) -> str:
+    rows = [[_btn((name or f"id{vk_id}")[:40], WHITE,
+                  {"cmd": "blacklist_remove", "vk_id": vk_id, "page": page})]
+            for vk_id, name in clients]
+    nav = []
+    if page > 1:
+        nav.append(_btn("⬅️ Назад", WHITE, {"cmd": "blacklist_remove_menu", "page": page - 1}))
+    if page < pages:
+        nav.append(_btn("Вперёд ➡️", WHITE, {"cmd": "blacklist_remove_menu", "page": page + 1}))
+    if nav:
+        rows.append(nav)
+    rows.append([_btn("Закрыть", WHITE, {"cmd": "blacklist_close"})])
+    return keyboard(rows, inline=True)
+
+
 
 
 def missed_offer_timeout_keyboard() -> str:
@@ -814,10 +837,15 @@ def pending_orders_keyboard(orders: list, page: int, total_pages: int) -> str:
 
 
 def order_offer_keyboard(order_id: int, has_customer_price: bool = False) -> str:
-    rows = [
-            [_btn("✅ Поехать", GREEN, {"cmd": "accept", "order_id": order_id})],
-            [_btn("🚫 Отказаться", RED, {"cmd": "decline", "order_id": order_id})],
-        ]
+    rows = []
+    options = [1, 3, 5, 10, 15, 25]
+    for index in range(0, len(options), 2):
+        rows.append([_btn(f"{minutes} мин", BLUE,
+                         {"cmd": "offer_eta", "order_id": order_id, "minutes": minutes})
+                     for minutes in options[index:index + 2]])
+    rows.append([_btn("✏️ Индивидуальное время", WHITE,
+                      {"cmd": "offer_eta_custom", "order_id": order_id})])
+    rows.append([_btn("🚫 Отказаться", RED, {"cmd": "decline", "order_id": order_id})])
     return keyboard(rows, inline=True)
 
 
@@ -919,12 +947,7 @@ def route_parallel_offer_keyboard(order_id: int) -> str:
     # Transient offer controls must be inline. A regular keyboard replaces the
     # driver's persistent active-ride menu and can remove it later when the
     # tracked offer message is deleted after a refusal.
-    return keyboard([
-        [_btn("✅ Взять параллельную заявку", GREEN,
-              {"cmd": "route_parallel_take", "order_id": order_id})],
-        [_btn("❌ Отказаться", RED,
-              {"cmd": "parallel_route_decline", "order_id": order_id})],
-    ], inline=True)
+    return parallel_eta_keyboard(order_id)
 
 
 def parallel_eta_keyboard(order_id: int) -> str:

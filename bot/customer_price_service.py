@@ -217,7 +217,12 @@ def reserve_from_chat(session: Session, driver: User, order_id: int) -> None:
     order = session.query(Order).filter(Order.id == int(order_id or 0)).with_for_update().one_or_none()
     if not order or not has_price(order) or order.status != "chat_search" or order.driver_id:
         return vk.send_message(driver.vk_id, "Заявка уже недоступна.")
-    from . import parallel_orders
+    from . import parallel_orders, blacklist_service
+    if (getattr(order, "eta_offer_source", None) in ("parallel", "parallel_chat", "parallel_auto")
+            and order.parallel_offer_driver_id):
+        return vk.send_message(driver.vk_id, "Заявку уже рассматривает другой водитель.")
+    if blacklist_service.blocks(session, driver.id, order.passenger_id):
+        return vk.send_message(driver.vk_id, "Заявка недоступна.")
     if not parallel_orders.local_line_allows(order, driver):
         return vk.send_message(driver.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
     from .handlers import active_order_for

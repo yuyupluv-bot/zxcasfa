@@ -1,6 +1,9 @@
 """Waiting orders that a busy driver can reserve for the next ride."""
 from __future__ import annotations
 
+from . import blacklist_service
+
+import datetime as dt
 import json
 import re
 import threading
@@ -97,6 +100,9 @@ def _exclude_from_auto_offer(order: Order, driver_id: int) -> None:
 
 
 def _clear_route_offer_state(order: Order) -> None:
+    if getattr(order, "eta_offer_source", None) in ("parallel", "parallel_chat", "parallel_auto"):
+        order.eta_offer_source = None
+        order.eta_offer_expires_at = None
     order.parallel_offer_driver_id = None
     order.parallel_offer_trip_id = None
     order.parallel_offer_outbox_id = None
@@ -247,7 +253,9 @@ def _destination_restricted_orders(current: Order, orders: list[Order]) -> list[
 
 def _free_driver_has_priority(session: Session, order: Order) -> bool:
     """Parallel offers are forbidden while a free driver can handle the order."""
-    if order.offered_driver_id or order.offer_outbox_id:
+    if (order.offered_driver_id or order.offer_outbox_id
+            or (getattr(order, "eta_offer_source", None) in ("parallel", "parallel_chat", "parallel_auto")
+                and order.parallel_offer_driver_id)):
         return True
     from . import order_service
     city = route_priority_city(order)
@@ -257,9 +265,12 @@ def _free_driver_has_priority(session: Session, order: Order) -> bool:
         # the free-driver destination.
         if is_route_fallback(order):
             return queue_service.has_waiting_driver(
-                session, "Горнозаводск", line_scope="exact"
+                session, "Горнозаводск", line_scope="exact",
+                exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id)),
             )
-        return queue_service.has_waiting_driver(session, city, line_scope="exact")
+        return queue_service.has_waiting_driver(
+            session, city, line_scope="exact",
+            exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id)))
     return order_service.has_eligible_waiting_driver(session, order)
 
 
@@ -293,7 +304,8 @@ def _parallel_candidate_filter(query):
 def has_available_for_current(session: Session, current: Order) -> bool:
     """Whether the active driver's menu should show a green parallel indicator."""
     driver = session.get(User, current.driver_id) if current.driver_id else None
-    return any(local_line_allows(row, driver) for row in
+    return any(local_line_allows(row, driver)
+               and not blacklist_service.blocks(session, current.driver_id, row.passenger_id) for row in
                _destination_restricted_orders(current, available(session)))
 
 
@@ -326,6 +338,7 @@ def has_eligible_busy_driver_for_order(session: Session, order: Order) -> bool:
         and current.driver_id not in offered_driver_ids
         and current.driver_id not in excluded_driver_ids
         and not current.parallel_auto_offers_disabled
+        and not blacklist_service.blocks(session, current.driver_id, order.passenger_id)
         and local_line_allows(order, session.get(User, current.driver_id))
         for current in current_orders
     )
@@ -506,7 +519,6 @@ def refresh_gornozavodsk_parallel_notices(
     # rows. Move to one durable reference on User, exactly like away notices.
     _remove_legacy_gorno_aggregate_refs(session)
     candidates = available(session)
-    count = sum(1 for row in candidates if route_priority_city(row) is None)
     current_orders = session.query(Order).filter(
         Order.status.in_(ACTIVE),
         Order.driver_id.isnot(None),
@@ -522,14 +534,17 @@ def refresh_gornozavodsk_parallel_notices(
         origin = (_origin_city(route) or _city_before_to_separator(route)
                   or _origin_city(address_from) or _city_first_two(address_from)
                   or _city_first_two(route))
+        driver = session.get(User, driver_id)
+        personal_candidates = [candidate for candidate in candidates
+            if not blacklist_service.blocks(session, driver_id, candidate.passenger_id)
+            and local_line_allows(candidate, driver)]
         if origin in ("Пашия", "Кусья"):
-            driver = session.get(User, driver_id)
-            # Match the driver's actual parallel list, including line restrictions.
-            counts[driver_id] = sum(1 for candidate in
-                _destination_restricted_orders(current, candidates)
-                if local_line_allows(candidate, driver))
+            # Use the same personal eligibility as the visible parallel list.
+            counts[driver_id] = len(_destination_restricted_orders(current, personal_candidates))
         elif _is_gornozavodsk_trip(current):
-            counts[driver_id] = count
+            counts[driver_id] = sum(1 for candidate in
+                _destination_restricted_orders(current, personal_candidates)
+                if route_priority_city(candidate) is None)
         else:
             continue
         eligible_driver_ids.add(driver_id)
@@ -635,6 +650,8 @@ def _auto_offer_trip_is_eligible(
         or driver_id in excluded_driver_ids
     ):
         return False
+    if blacklist_service.blocks(session, driver_id, order.passenger_id):
+        return False
     if not local_line_allows(order, session.get(User, driver_id)):
         return False
     route = current.route_text or current.address_to
@@ -717,6 +734,10 @@ def _route_offer_card_text(session: Session, order: Order) -> str:
 
 def notify_busy_drivers(session: Session, order: Order) -> bool:
     """Create one durable 60-second offer for one matching busy driver."""
+    if (getattr(order, "eta_offer_source", None) in ("parallel", "parallel_chat", "parallel_auto")
+            and order.parallel_offer_driver_id and order.status in PARALLEL_CANDIDATE_STATUSES):
+        # This is an exclusive ETA decision, not an accepted next ride.
+        return True
     if (
         order.parallel_offer_driver_id
         and order.parallel_offer_trip_id
@@ -776,6 +797,10 @@ def notify_busy_drivers(session: Session, order: Order) -> bool:
     order.parallel_offer_driver_id = driver.id
     order.parallel_offer_trip_id = current.id
     order.parallel_offer_outbox_id = int(outbox_id)
+    order.eta_offer_source = "parallel_auto"
+    order.eta_offer_expires_at = time_utils.now() + dt.timedelta(seconds=60)
+    # Do not ask queue actuality while a driver is still choosing ETA.
+    session.query(PassengerQueue).filter(PassengerQueue.order_id == order.id).delete()
     # Keep the legacy map populated so old cancellation/administration code
     # remains able to find the tracked card during rolling deployments.
     order.parallel_notified_driver_ids = json.dumps(
@@ -838,7 +863,8 @@ def show(session: Session, driver: User, current: Order, page=1) -> None:
             attachment=vk.prepare_voice_attachment(driver.vk_id, reserved.voice_attachment),
         )
     rows = [row for row in _destination_restricted_orders(current, available(session))
-            if local_line_allows(row, driver)]
+            if local_line_allows(row, driver)
+            and not blacklist_service.blocks(session, driver.id, row.passenger_id)]
     if not rows:
         from .handlers import _driver_ride_kb
         return vk.send_message(driver.vk_id, "Свободных параллельных заявок пока нет.",
@@ -866,6 +892,74 @@ def show(session: Session, driver: User, current: Order, page=1) -> None:
     )
 
 
+
+def _eta_offer_remaining(order: Order) -> float:
+    deadline = getattr(order, "eta_offer_expires_at", None)
+    if deadline is None:
+        return 0.0
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=dt.timezone.utc)
+    return max(0.0, (deadline - time_utils.now()).total_seconds())
+
+
+def _reserve_eta_choice(session: Session, driver: User, current: Order,
+                        order: Order, *, from_chat: bool = False) -> Order:
+    """Reserve only the decision. Never assign/notify the passenger before ETA."""
+    if (order.parallel_offer_driver_id == driver.id
+            and getattr(order, "eta_offer_source", None) in ("parallel", "parallel_chat", "parallel_auto")):
+        if _eta_offer_remaining(order) <= 0:
+            vk.send_message(driver.vk_id, "Время ответа истекло.")
+            return order
+        vk.send_message(driver.vk_id, "Через сколько минут будете у клиента?",
+                        keyboard=kb.parallel_eta_keyboard(order.id))
+        return order
+    from . import passenger_queue
+    passenger_queue.remove(session, order.id)
+    order.parallel_offer_driver_id = driver.id
+    order.parallel_offer_trip_id = current.id
+    order.eta_offer_source = "parallel_chat" if from_chat else "parallel"
+    order.eta_offer_expires_at = time_utils.now() + dt.timedelta(seconds=60)
+    pointer = vk.send_tracked_message(
+        driver.vk_id, _route_offer_card_text(session, order),
+        keyboard=kb.parallel_eta_keyboard(order.id),
+        attachment=vk.prepare_voice_attachment(driver.vk_id, order.voice_attachment))
+    if not pointer:
+        raise RuntimeError("Could not enqueue parallel ETA choice")
+    order.parallel_offer_outbox_id = int(pointer)
+    order.parallel_notified_driver_ids = json.dumps({str(driver.id): int(pointer)})
+    oid = order.id
+    timers.schedule("route_parallel_offer", oid, 60, lambda: _route_offer_timeout(oid))
+    return order
+
+
+def _expire_eta_choice(session: Session, order: Order, *, timed_out: bool = True) -> None:
+    """Release the next-order decision without cancelling the current trip."""
+    from . import order_service, passenger_queue
+    driver_id = order.parallel_offer_driver_id
+    driver = session.get(User, driver_id) if driver_id else None
+    _finalize_route_offer_card(session, order,
+        "⌛ Время выбора прибытия истекло." if timed_out else "Вы отказались от параллельной заявки.")
+    order.status = "queued"
+    if driver_id:
+        # A declined/ignored decision must not immediately auto-offer the
+        # same request back to its previous owner during FIFO fallback.
+        _exclude_from_auto_offer(order, driver_id)
+    if driver and timed_out:
+        # Remove future availability, not the already accepted current ride.
+        current = session.query(Order).filter(
+            Order.driver_id == driver.id, Order.status.in_(ACTIVE)).first()
+        queue_service.leave_queue(session, driver)
+        if current is not None:
+            driver.driver_status = "busy"
+            current.parallel_auto_offers_disabled = True
+        vk.send_message(driver.vk_id,
+            "Вы не указали время за 60 секунд. Вас сняли с линии; текущая поездка продолжается.")
+    passenger_queue.enqueue(session, order)
+    session.flush()
+    order_service.offer_to_next_driver(session, order, {driver_id} if driver_id else None)
+    refresh_busy_driver_menus(session, exclude_driver_ids={driver_id} if driver_id else None)
+
+
 def take(
     session: Session,
     driver: User,
@@ -873,6 +967,7 @@ def take(
     *,
     require_live_offer: bool = False,
     from_chat: bool = False,
+    selected_eta: int | None = None,
 ) -> Order | None:
     # Two fast taps arrive as two events in two workers. Locking the driver
     # row first makes the "already has a parallel order" check below
@@ -906,6 +1001,9 @@ def take(
             "Эта заявка уже отменена или её взял другой водитель."
         )
         return vk.send_message(driver.vk_id, message)
+    session.refresh(order, with_for_update=True)
+    if blacklist_service.blocks(session, driver.id, order.passenger_id):
+        return vk.send_message(driver.vk_id, "Заявка недоступна.")
     if not local_line_allows(order, driver):
         return vk.send_message(driver.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
     if require_live_offer and (
@@ -918,7 +1016,17 @@ def take(
             "Это автоматическое предложение уже недоступно. "
             "Проверьте актуальные заявки в разделе „🔀 Параллельные заявки“.",
         )
-    if _free_driver_has_priority(session, order):
+    pending_owner = order.parallel_offer_driver_id
+    eta_reservation = getattr(order, "eta_offer_source", None) in ("parallel", "parallel_chat", "parallel_auto")
+    if pending_owner and pending_owner != driver.id:
+        return vk.send_message(driver.vk_id, "Заявку уже рассматривает другой водитель.")
+    if eta_reservation:
+        if order.parallel_offer_trip_id != current.id or _eta_offer_remaining(order) <= 0:
+            return vk.send_message(driver.vk_id, "Время ответа истекло или текущая поездка изменилась.")
+        from_chat = order.eta_offer_source == "parallel_chat"
+    if selected_eta is not None and (not eta_reservation or pending_owner != driver.id):
+        return vk.send_message(driver.vk_id, "Это предложение времени уже недоступно.")
+    if not eta_reservation and _free_driver_has_priority(session, order):
         if not from_chat:
             return vk.send_message(
                 driver.vk_id,
@@ -930,9 +1038,20 @@ def take(
             driver.vk_id,
             "По текущему маршруту вам доступны только параллельные заявки из города назначения.",
         )
+    if selected_eta is None:
+        other_offer = session.query(Order).filter(
+            Order.id != order.id, Order.parallel_offer_driver_id == driver.id).first()
+        if other_offer:
+            return vk.send_message(driver.vk_id, "Сначала ответьте на уже предложенную параллельную заявку.")
+        return _reserve_eta_choice(session, driver, current, order, from_chat=from_chat)
+    if not 1 <= selected_eta <= 1440:
+        return vk.send_message(driver.vk_id, "Укажите целое количество минут от 1 до 1440.")
+    _finalize_route_offer_card(session, order, f"⏰ Вы выбрали {selected_eta} мин.")
     timers.cancel("route_parallel_offer", order.id)
     order.parallel_driver_id = driver.id
     order.parallel_accepted_at = time_utils.now()
+    order.parallel_eta = selected_eta
+    order.parallel_eta_set_at = time_utils.now()
     # A reserved next request is not the driver's current ride yet.  Keeping
     # driver_id empty prevents active-order lookups, completion and
     # cancellation code from confusing it with the trip being performed now.
@@ -947,42 +1066,16 @@ def take(
     # The candidate disappeared for other drivers: immediately repaint their indicators.
     refresh_busy_driver_menus(session, exclude_driver_ids={driver.id})
     from .handlers import request_claim_actuality
+    if order.chat_notice_outbox_id:
+        from . import order_service
+        order_service.finalize_chat_order_notice(session, order, driver)
     if request_claim_actuality(session, driver, order, parallel=True):
-        return
-    passenger = session.get(User, order.passenger_id)
-    if passenger and not order.dispatcher_id:
-        # Ask even for a newly created parallel request, without blocking the
-        # driver's choice of ETA or affecting the ongoing ride.
-        order.departure_prompt_outbox_id = vk.send_tracked_message(
-            passenger.vk_id,
-            "Водитель завершает текущую поездку и затем поедет к вам.\n"
-            "⚠️ При отмене после перехода водителя к заявке или спустя 2 минуты "
-            "после её принятия будет ложный вызов.\nВы ждёте машинку?",
-            keyboard=kb.passenger_departure_keyboard(order.id),
-        )
-    timers.schedule("parallel_eta", order.id, 120, lambda: _eta_timeout(order.id))
-    route = order.route_text or f"{order.address_from} — {order.address_to}"
-    passenger_label = (
-        f"[id{passenger.vk_id}|{passenger.full_name or ('id' + str(passenger.vk_id))}]"
-        if passenger else "Пассажир не указан"
-    )
-    eta_prompt = (
-        f"Пассажир: {passenger_label}\n"
-        f"✅ Вы выбрали параллельную заявку #{order.number}.\n"
-        f"Ваша заявка: {route}\n\n"
-        "Через сколько вы будете у клиента? Выберите вариант или укажите своё время:"
-    )
-    # Track the exact parallel ETA message so its inline choices disappear
-    # after the driver selects a value. Keep the passenger and request details
-    # in the final edited card as well.
-    order.offer_outbox_id = vk.send_tracked_message(
-        driver.vk_id,
-        eta_prompt,
-        keyboard=kb.parallel_eta_keyboard(order.id),
-        attachment=vk.prepare_voice_attachment(driver.vk_id, order.voice_attachment),
-    )
-    from . import push_service
-    push_service.send(session, driver.id, "parallel_order", order)
+        return order
+    if not order.dispatcher_id:
+        # The ETA card below is also the passenger's confirmation prompt.
+        order.actuality_confirmed = True
+    # ETA itself accepts the reservation; do not start the old 120s second decision.
+    save_eta(session, driver, order.id, selected_eta, allow_existing=True)
     return order
 
 
@@ -990,6 +1083,9 @@ def prompt_eta_after_actuality(session: Session, driver: User, order: Order) -> 
     """Continue a reserved parallel claim after the passenger presses «Да, жду»."""
     if order.status != "parallel_assigned" or order.parallel_driver_id != driver.id:
         return vk.send_message(driver.vk_id, "Параллельная заявка уже недоступна.")
+    if order.parallel_eta:
+        return save_eta(session, driver, order.id, order.parallel_eta, notify_passenger=False, allow_existing=True)
+    # Compatibility only for a reservation accepted by a pre-V189 process.
     timers.schedule("parallel_eta", order.id, 120, lambda: _eta_timeout(order.id))
     passenger = session.get(User, order.passenger_id)
     route = order.route_text or f"{order.address_from} — {order.address_to}"
@@ -1018,7 +1114,20 @@ def take_route_offer(session: Session, driver: User, order_id: int) -> None:
     )
 
 
-def save_eta(session: Session, driver: User, order_id: int, minutes: int) -> None:
+def save_eta(session: Session, driver: User, order_id: int, minutes: int, *, notify_passenger: bool = True, allow_existing: bool = False) -> None:
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return vk.send_message(driver.vk_id, "Укажите целое количество минут от 1 до 1440.")
+    if not 1 <= minutes <= 1440:
+        return vk.send_message(driver.vk_id, "Укажите целое количество минут от 1 до 1440.")
+    # Inspect without taking an order lock. take() must acquire user ->
+    # current trip -> candidate, exactly like the competing timeout.
+    snapshot = session.get(Order, int(order_id or 0))
+    if (snapshot and getattr(snapshot, "eta_offer_source", None) in ("parallel", "parallel_chat", "parallel_auto")
+            and snapshot.status in PARALLEL_CANDIDATE_STATUSES
+            and snapshot.parallel_offer_driver_id == driver.id):
+        return take(session, driver, snapshot.id, selected_eta=minutes)
     order = (
         session.query(Order)
         .filter(Order.id == int(order_id))
@@ -1027,7 +1136,10 @@ def save_eta(session: Session, driver: User, order_id: int, minutes: int) -> Non
     )
     if not order or order.parallel_driver_id != driver.id or order.status != "parallel_assigned":
         return vk.send_message(driver.vk_id, "Параллельная заявка недоступна.")
-    minutes = max(1, min(600, int(minutes)))
+    # A repeated ETA callback must not create a second passenger card. The
+    # initial acceptance and the old-request continuation explicitly opt in.
+    if order.parallel_eta and not allow_existing:
+        return
     timers.cancel("parallel_eta", order.id)
     from . import order_service
     passenger = session.get(User, order.passenger_id)
@@ -1046,16 +1158,18 @@ def save_eta(session: Session, driver: User, order_id: int, minutes: int) -> Non
     )
     order.parallel_eta = minutes
     order.parallel_eta_set_at = time_utils.now()
-    if passenger:
+    if passenger and notify_passenger:
         name = driver.full_name or f"id{driver.vk_id}"
         if order.dispatcher_id:
             vk.send_message(passenger.vk_id,
                             f"✅ Для заявки #{order.number} назначен водитель {name}, авто: {driver.car_full}. Водитель завершает текущую поездку и будет у клиента ориентировочно через {minutes} мин.")
         else:
-            vk.send_message(passenger.vk_id,
-                            order_service.departure_driver_card_text(driver) + "\n"
-                            f"Водитель завершает текущую поездку и будет у вас ориентировочно через {minutes} мин.",
-                            keyboard=kb.passenger_ride_keyboard(order.id))
+            order.departure_prompt_outbox_id = vk.send_tracked_message(
+                passenger.vk_id,
+                order_service.departure_driver_card_text(driver) + "\n"
+                f"Водитель завершает текущую поездку и будет у вас ориентировочно через {minutes} мин.",
+                keyboard=kb.passenger_departure_keyboard(order.id),
+            )
     current = session.query(Order).filter(Order.driver_id == driver.id,
               Order.status.in_(ACTIVE)).first()
     if current:
@@ -1139,6 +1253,10 @@ def _clear_reserved_passenger_notices(session: Session, order: Order) -> None:
 
 def decline(session: Session, driver: User, order_id: int) -> None:
     order = session.get(Order, int(order_id or 0))
+    if (order and order.status in PARALLEL_CANDIDATE_STATUSES
+            and order.parallel_offer_driver_id == driver.id
+            and getattr(order, "eta_offer_source", None) in ("parallel", "parallel_chat", "parallel_auto")):
+        return _expire_eta_choice(session, order, timed_out=False)
     if not order or order.parallel_driver_id != driver.id or order.status != "parallel_assigned":
         return vk.send_message(driver.vk_id, "Параллельная заявка уже недоступна.")
     timers.cancel("parallel_eta", order.id)
@@ -1396,12 +1514,23 @@ def _route_offer_timeout(order_id: int) -> None:
             .with_for_update()
             .one_or_none()
         )
+        if order is not None:
+            session.refresh(order, with_for_update=True)
         if (
             not order
             or order.parallel_offer_driver_id != driver_id
             or order.parallel_offer_trip_id != trip_id
         ):
             return
+        if (getattr(order, "eta_offer_source", None) in ("parallel", "parallel_chat", "parallel_auto")
+                and order.status in PARALLEL_CANDIDATE_STATUSES
+                and order.driver_id is None and order.parallel_driver_id is None):
+            remaining = _eta_offer_remaining(order)
+            if remaining > 0:
+                timers.schedule("route_parallel_offer", order.id, remaining,
+                                lambda: _route_offer_timeout(order_id))
+                return
+            return _expire_eta_choice(session, order)
         if (
             order.status not in PARALLEL_CANDIDATE_STATUSES
             or order.driver_id is not None

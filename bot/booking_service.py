@@ -162,6 +162,9 @@ def take_booking(session: Session, booking_id: int, driver: User) -> Booking | N
     )
     if booking is None or booking.status != "pending":
         return None
+    from . import blacklist_service
+    if blacklist_service.blocks(session, driver.id, booking.passenger_id):
+        return None
     booking.driver_id = driver.id
     booking.status = "assigned"
     booking.reminder_sent = False

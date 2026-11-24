@@ -1,0 +1,17 @@
+{
+  "previous_full_total": 910,
+  "current_full_total": 933,
+  "current_passed": 879,
+  "failures": 28,
+  "errors": 23,
+  "skipped": 3,
+  "additional_failure_names_vs_v188": [
+    "test_03_full_card_and_exact_sixty_second_timer (test_requirements_v83_route_parallel_offer.RouteParallelOfferV83Tests.test_03_full_card_and_exact_sixty_second_timer)",
+    "test_04_auto_accept_is_locked_and_enters_existing_eta_flow (test_requirements_v83_route_parallel_offer.RouteParallelOfferV83Tests.test_04_auto_accept_is_locked_and_enters_existing_eta_flow)",
+    "test_07_gorno_gets_count_only_notice (test_requirements_v115_requested_fixes.RequestedFixesV115.test_07_gorno_gets_count_only_notice)",
+    "test_all_transient_parallel_controls_are_inline (test_requirements_v44_parallel_inline_menu.ParallelInlineMenuV44Tests.test_all_transient_parallel_controls_are_inline)",
+    "test_parallel_card_keeps_linked_passenger_and_eta_context (test_requirements_v50_parallel_queue_visibility.ParallelQueueVisibilityV50Tests.test_parallel_card_keeps_linked_passenger_and_eta_context)",
+    "test_parallel_list_notifications_and_take_respect_free_priority (test_requirements_v60_free_driver_before_parallel.FreeDriverBeforeParallelV60Tests.test_parallel_list_notifications_and_take_respect_free_priority)"
+  ],
+  "resolved_failure_names_vs_v188": []
+}

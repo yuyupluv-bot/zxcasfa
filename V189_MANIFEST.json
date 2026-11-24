@@ -1,0 +1,82 @@
+[
+  {
+    "path": "QA_V189_RU.md",
+    "status": "added",
+    "sha256": "9d70d1cd1fe4cb4a8da36a046ab8332bcf8f2949750430eaf0767f6e6a6e7211"
+  },
+  {
+    "path": "START_HERE_V189_RU.md",
+    "status": "added",
+    "sha256": "19941934625c26df6f639260a9b6e274f6692a88eb425e8b816ce190862e87aa"
+  },
+  {
+    "path": "bot/customer_price_service.py",
+    "status": "modified",
+    "sha256": "5fc171a288c2c64cbf951e162e0369ceceb1942772af2bad6f34e31ca57eaaff"
+  },
+  {
+    "path": "bot/delivery_service.py",
+    "status": "modified",
+    "sha256": "82fdb683b42b8fe00691011bb1f2fa2919a8fe8e13a616a59ec6947014ea2fe5"
+  },
+  {
+    "path": "bot/handlers.py",
+    "status": "modified",
+    "sha256": "26ae5e1860a65f5d61602610f5303e71c115f69eb2c7e8b959e3a45a2692b154"
+  },
+  {
+    "path": "bot/keyboards.py",
+    "status": "modified",
+    "sha256": "e30861df83d8c26e1e16ecf22d5446296eb4eb9bf6166510b72391ccd66ed4ee"
+  },
+  {
+    "path": "bot/order_service.py",
+    "status": "modified",
+    "sha256": "7311394ef72f7aa40530753c7a2b141c003c967645fc8e9fe600b590a0f2aba8"
+  },
+  {
+    "path": "bot/parallel_orders.py",
+    "status": "modified",
+    "sha256": "69f547c8abe481616eb1d71a6336f53ed9664e0eeb92e8d7636e10d7bd9863bf"
+  },
+  {
+    "path": "common/driver_app_state.py",
+    "status": "modified",
+    "sha256": "bc68846d70352c11beb34e31ad5e568afc7cc01fd643b999c1bb3768692a7da7"
+  },
+  {
+    "path": "qa_v189/arrival-8.log",
+    "status": "added",
+    "sha256": "afe27cdf9056e9ee62433561190ba9579317d460ac7e93274cf7bce7b8abaeaa"
+  },
+  {
+    "path": "qa_v189/comparison.json",
+    "status": "added",
+    "sha256": "2f883fbc9bf1e97f2144f15e49c3eda4f1172d406bde7b701f044589618e6a45"
+  },
+  {
+    "path": "qa_v189/full-final.log",
+    "status": "added",
+    "sha256": "cc29fecd90bb668045122ed8962fcc3e1fbd9cdb1d5d85eac7fca41b393a8846"
+  },
+  {
+    "path": "qa_v189/previous-v188-full.log",
+    "status": "added",
+    "sha256": "d32786652ede10054e7deb7fd626e5510923dd52a94d4040bf3174e74508671a"
+  },
+  {
+    "path": "qa_v189/regressions-23.log",
+    "status": "added",
+    "sha256": "5e54065f68a8de918878b2686ca18b30a67f1bd35f6b89c1892e1adcbf2927c9"
+  },
+  {
+    "path": "qa_v189/v188-41.log",
+    "status": "added",
+    "sha256": "c8e376b9916003fa708ebfada1eb4fb399e7b72c6318bbff0fa9fbaa413c35a0"
+  },
+  {
+    "path": "tests/test_v189_audit_regressions.py",
+    "status": "added",
+    "sha256": "94f8f549f8f8cb2b144d2e305e77f3ef6f686c5ac2da8d732873ed4cc416d94b"
+  }
+]

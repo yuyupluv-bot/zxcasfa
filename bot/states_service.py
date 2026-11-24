@@ -67,6 +67,8 @@ class States:
     # driver
     D_MENU = "driver_menu"
     D_ON_LINE = "driver_on_line"
+    D_BLACKLIST_ADD = "driver_blacklist_add"
+    D_OFFER_ETA = "driver_offer_eta"
     D_OFFER = "driver_offer"          # received an offer, deciding
     D_DECLINE_REASON = "driver_decline_reason"
     D_ETA = "driver_eta"              # entering custom arrival time (free text)

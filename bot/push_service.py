@@ -82,6 +82,10 @@ def _firebase():
 
 
 def send(session, driver_id: int, event_key: str, order=None):
+    from . import blacklist_service
+    if order is not None and blacklist_service.blocks(session, driver_id, order.passenger_id):
+        return
+
     """Send only to active devices paired with this exact driver."""
     if not driver_id:
         return 0

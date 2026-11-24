@@ -10,6 +10,8 @@ The queue is a strict FIFO ordered by ``position`` (creation order).
 """
 from __future__ import annotations
 
+from . import blacklist_service
+
 import datetime as dt
 import threading
 import time
@@ -146,7 +148,8 @@ def dispatch_new_order(session: Session, order: Order) -> None:
     free_city = parallel_orders.free_line_city(order)
     if route_city:
         if queue_service.has_waiting_driver(
-            session, route_city, line_scope="exact"
+            session, route_city, line_scope="exact",
+                exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id))
         ):
             passenger = session.get(User, order.passenger_id)
             if passenger and not order.dispatcher_id:
@@ -304,10 +307,12 @@ def try_promote(session: Session) -> None:
                 line_scope = "exact"
                 line_name = "Горнозаводск"
                 has_driver = queue_service.has_waiting_driver(
-                    session, line_name, line_scope="exact"
+                    session, line_name, line_scope="exact",
+                    exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id))
                 )
             elif route_city and queue_service.has_waiting_driver(
-                session, route_city, line_scope="exact"
+                session, route_city, line_scope="exact",
+                exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id))
             ):
                 line_scope = "exact"
                 line_name = route_city
@@ -442,10 +447,10 @@ def request_actuality_for_order(
     ).one_or_none()
     if not entry:
         return False
-    created_at = entry.created_at or order.created_at or _now()
+    created_at = order.created_at or entry.created_at or _now()
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=dt.timezone.utc)
-    if (_now() - created_at).total_seconds() < 180:
+    if (_now() - created_at).total_seconds() <= 120:
         return False
     if entry.status == "waiting":
         _poll(session, entry)

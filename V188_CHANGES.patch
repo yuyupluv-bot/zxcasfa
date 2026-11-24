@@ -1,0 +1,1708 @@
+--- /dev/null
++++ b/CHANGES_V188_RU.md
+@@ -0,0 +1,34 @@
++# V188 — время принятия и личный чёрный список
++
++Дата: 24.11.2026. Основа — предоставленный zxcasfa-main (5).zip.
++Это изменённые исходники, не развёрнутый и не принятый в эксплуатации релиз.
++
++## Изменения
++
++1. Обычное/персональное предложение сразу содержит варианты 1, 3, 5, 10, 15, 25 минут, индивидуальное время и «Отказаться». Выбор времени принимает заявку. Ввод своего времени не продлевает исходные 60 секунд.
++2. После 60 секунд без выбора времени существующий обработчик снимает водителя с линии и передаёт обычную заявку следующему подходящему водителю. Сохраняется прежнее исключение персональных заявок: выбранного пассажиром водителя нельзя подменить автоматически; пассажир выбирает другого.
++3. Нажатие «Взять» в общем чате/списке ожидающих для свободного водителя резервирует предложение до выбора времени, но не назначает поездку раньше времени. В публичном чате кнопка остаётся точкой входа в личный выбор времени, чтобы общий чат не показывал персональные кнопки ETA.
++4. Старый дополнительный шаг «Выезжаю» убран: после подтверждения старой заявки используется уже выбранное время либо сразу открывается выбор времени для старых активных заявок.
++5. Актуальность проверяется только при возрасте заявки строго больше 120 секунд. Для обычного принятия учитывается время создания → время принятия. Вопросы очереди ожидания также используют время создания заявки, а не повторной постановки в очередь. Свежие заявки не получают вопрос «Ждёте машинку?» после ETA. Исключения диспетчерских/партнёрских доставок сохранены.
++6. В меню водителя на линии вместо отдельных доходов/отзывов — «Мои сведения». Доходы и отзывы остаются внутри сведений.
++7. В сведениях добавлен личный чёрный список. Сам список и «Добавить в ЧС»/«Убрать из ЧС» используют обычную клавиатуру. Добавление — ссылкой vk.ru/vk.com, включая короткое имя; неизвестный боту клиент сохраняется по VK ID. Удаление — персональными inline-кнопками с постраничным выводом.
++8. В оценке пассажира есть отдельная строка «Чёрный список» под одной звездой; добавление закрывает предложение оценки без записи отзыва и не меняет очередь/текущую поездку. Для лимита VK шесть inline-строк оценки 5 и 4 помещены в одну верхнюю строку.
++9. Чёрный список исключает водителя из FIFO, личного выбора пассажиром, предложений параллельных заявок, личных списков, прямого принятия, бронирования и ручного назначения из админки. Причина пассажиру не раскрывается. Это не общий бан клиента и не отмена существующей поездки.
++10. Обычная карточка начинается с «📌 маршрут», содержит ссылку-имя пассажира и рейтинг; после выбора добавляется «⏰ Вы выбрали 10 мин.». Цена клиента, голосовое вложение, дополнительные услуги и важные специальные примечания сохранены.
++
++## Границы и совместимость
++
++- Общий водительский чат остаётся общим: VK не позволяет скрыть одно сообщение от отдельного участника. Личные предложения не отправляются исключённому водителю, а принять такую заявку через кнопку он не может.
++- Текущие поездки и механизм резервирования параллельной заявки, доставка с согласованием цены, брони и правила персонального выбора не переписаны. У доставки сохранены отдельные шаги стоимости/срока выполнения. Ранее выданные кнопки при обычном принятии ведут к выбору времени.
++- Лимит обычного предложения теперь фиксирован — 60 секунд. Старое поле driver_accept_timeout в админке не меняет этот лимит.
++- Android APK не пересобирался. Обновлена серверная проекция команд для приложения; реальное устройство не проверено.
++- Старые шаблоны сообщений, сохранённые в БД, могут переопределять вид текста; это нужно проверить на стенде с реальными настройками.
++
++## Обновление базы
++
++Новая миграция: `0059_driver_blacklist`, после `0058_arrival_notice`.
++Она добавляет таблицу личных исключений с уникальной парой водитель/VK ID и поля источника/крайнего срока предложения в orders. Существующие заявки и данные пользователей не удаляются.
++
++Перед установкой сделайте резервную копию PostgreSQL и исходников. На отдельном стенде установите requirements.txt, примените `alembic upgrade head`, затем запустите бота и админку из одной версии. BotHost уже применяет миграции в штатном стартовом процессе. Одновременная работа старого и нового бота с одной базой недопустима.
++
++Подробности фактических проверок и ограничений — QA_V188_RU.md. Не заменяйте рабочий сервер без стендовой проверки.
+--- /dev/null
++++ b/QA_V188_RU.md
+@@ -0,0 +1,45 @@
++# V188 — фактическая проверка
++
++## Выполнено
++
++- Синтаксический разбор всех Python-исходников: успешно.
++- Новый автономный набор `test_v188_eta_blacklist.py`: **41 тест, все прошли**. Проверяется выполнение оригинальных функций с подменёнными границами ORM/сети и часть структурных инвариантов. Проверены пороги 60/120 секунд, свой ввод, блокировка просроченных/чужих кнопок, принятие с ETA, клавиатуры, личное добавление/удаление ЧС, отсутствие оценки при добавлении, повторное добавление и граф миграций.
++- Имеющийся `test_arrival_cleanup_v187.py`: **8 тестов, все прошли**.
++- Граф миграций имеет одну вершину: 0059_driver_blacklist.
++- Старые файлы тестов не редактировались для сокрытия расхождений.
++
++## Полный старый набор НЕ зелёный
++
++До изменений: 869 тестов, 8 failures, 6 errors, 3 skipped.
++Полный прогон после основных изменений (включал первые 38 новых проверок): 907 тестов, 22 failures, 23 errors, 3 skipped.
++После этого добавлены ещё 3 успешных автономных проверки принятия; отдельно новый набор прошёл 41/41. Полный старый набор после этих трёх добавлений повторно не прогонялся.
++
++Сравнивать только число ошибок как число регрессий некорректно: в старом наборе есть точные проверки уже отменённых требований (принятие до ETA, 30 секунд для цены клиента, старые тексты карточек) и извлечение отдельной функции из AST без её новых зависимостей. Это НЕ доказывает отсутствие регрессий. В последнем полном прогоне такие изолированные фикстуры также получают NameError для новых помощников blacklist_service/claim_needs_actuality; их нужно адаптировать к новым интерфейсам в полноценном окружении.
++
++Полные результаты прогона до/после находятся в `qa_v188/`. Провалы не скрыты.
++
++## Что не удалось проверить
++
++В среде отсутствуют SQLAlchemy, pytest и часть штатных зависимостей. Установка requirements.txt предпринята и завершилась ошибкой сетевого доступа: `Failed to establish a new connection: [Errno -2] Name or service not known`. Поэтому здесь НЕ подтверждены:
++
++- реальный импорт полного приложения со всеми зависимостями;
++- миграция существующей PostgreSQL и блокировки при одновременных событиях;
++- интеграционные ORM/API сценарии;
++- реальные доставка/редактирование VK, разрешение коротких ссылок и Firebase;
++- Android-сборка и взаимодействие живого телефона;
++- нагрузочная и дорожная приёмка.
++
++Это кандидат исходников для стенда, а не заявление о готовности к бесконтрольной замене рабочего сервера.
++
++## Обязательная приёмка на стенде
++
++1. Свежая обычная заявка → меню времени → 5 минут: одно принятие, правильный пассажир, без вопроса актуальности.
++2. Свой ввод: открыть на 50-й секунде, отправить после 60-й — принятие не проходит; водитель снимается, заявка достаётся следующему.
++3. Заявки возрастом 119/120/121 секунду, в том числе из водительского чата: вопрос только при >120; после ответа не появляется «Выезжаю» и не требуется повторно вводить выбранное время.
++4. Одновременные выбор времени и таймаут, два нажатия времени, второй водитель в чате — не допускается двойное назначение.
++5. ЧС водителя №1: клиенту предлагается №2; место №1 не меняется; клиент не видит №1 в персональном выборе. Старые кнопки не обходят запрет.
++6. Добавление по vk.ru/id..., vk.ru/короткое_имя, повтор, неизвестный боту клиент; удаление и изоляция списка другого водителя.
++7. Добавление из оценки: нет звезды/отзыва, предложение оценки закрыто, очередь и текущая поездка не меняются.
++8. Отказ по каждой старой причине, передача в водительскую, недоступный чат, доставка, персональная заявка, бронь, параллельная заявка, ввод стоимости и завершение поездки.
++9. Голосовое и цена клиента сохраняются в карточке до и после выбора времени; приложение не показывает обходную кнопку раннего принятия.
++10. Перезапуск до/после крайнего срока предложения и применение миграции на копии реальной базы.
+--- a/bot/admin_order_assign_service.py
++++ b/bot/admin_order_assign_service.py
+@@ -56,7 +56,9 @@
+     ):
+         return False
+ 
+-    from . import parallel_orders
++    from . import parallel_orders, blacklist_service
++    if blacklist_service.blocks(session, driver.id, order.passenger_id):
++        return False
+     if not parallel_orders.local_line_allows(order, driver):
+         return False
+     queue_row = (
+--- /dev/null
++++ b/bot/blacklist_service.py
+@@ -0,0 +1,29 @@
++"""Private exclusion rules shared by every dispatch/claim path.
++
++No passenger notifications and no global ban: the pair applies only to its owner.
++"""
++from common.models import DriverBlacklist, User
++
++
++def excluded_driver_ids(session, passenger_id):
++    passenger = session.get(User, passenger_id) if passenger_id else None
++    if not passenger:
++        return set()
++    return {row[0] for row in session.query(DriverBlacklist.driver_id).filter(
++        DriverBlacklist.passenger_vk_id == passenger.vk_id).all()}
++
++
++def blocks(session, driver_id, passenger_id):
++    return driver_id in excluded_driver_ids(session, passenger_id)
++
++
++def add(session, driver, passenger_vk_id):
++    # Serialize duplicate taps/add-from-rating with add-by-link on PostgreSQL.
++    session.query(User).filter(User.id == driver.id).with_for_update().first()
++    row = session.query(DriverBlacklist).filter_by(
++        driver_id=driver.id, passenger_vk_id=passenger_vk_id).one_or_none()
++    if row is None:
++        row = DriverBlacklist(driver_id=driver.id, passenger_vk_id=passenger_vk_id)
++        session.add(row)
++        session.flush()
++    return row
+--- a/bot/booking_service.py
++++ b/bot/booking_service.py
+@@ -162,6 +162,9 @@
+     )
+     if booking is None or booking.status != "pending":
+         return None
++    from . import blacklist_service
++    if blacklist_service.blocks(session, driver.id, booking.passenger_id):
++        return None
+     booking.driver_id = driver.id
+     booking.status = "assigned"
+     booking.reminder_sent = False
+--- a/bot/customer_price_service.py
++++ b/bot/customer_price_service.py
+@@ -217,7 +217,9 @@
+     order = session.query(Order).filter(Order.id == int(order_id or 0)).with_for_update().one_or_none()
+     if not order or not has_price(order) or order.status != "chat_search" or order.driver_id:
+         return vk.send_message(driver.vk_id, "Заявка уже недоступна.")
+-    from . import parallel_orders
++    from . import parallel_orders, blacklist_service
++    if blacklist_service.blocks(session, driver.id, order.passenger_id):
++        return vk.send_message(driver.vk_id, "Заявка недоступна.")
+     if not parallel_orders.local_line_allows(order, driver):
+         return vk.send_message(driver.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
+     from .handlers import active_order_for
+--- a/bot/handlers.py
++++ b/bot/handlers.py
+@@ -33,6 +33,8 @@
+     BlockedUser,
+     Booking,
+     City,
++    DriverBlacklist,
++    ScheduledJob,
+     DriverQueue,
+     DriverSelection,
+     DriverAppPairCode,
+@@ -43,6 +45,7 @@
+     User,
+ )
+ 
++from . import blacklist_service
+ from common import audit
+ from common import time_utils
+ from common.settings_service import button_label, get_cached, get_int, msg, set_setting
+@@ -287,16 +290,19 @@
+     "choose_line", "set_line", "leave_line", "change_line", "stay_line",
+     "driver_away", "driver_car", "earnings", "reviews",
+     "fake_calls", "driver_statistics", "driver_online", "driver_offline",
+-    "pending_orders", "driver_info",
++    "pending_orders", "driver_info", "blacklist", "blacklist_add",
++    "blacklist_remove_menu", "blacklist_remove", "blacklist_close",
+ }
+-# V21 baseline was: _DRIVER_OFFER_ALLOWED_CMDS = {"accept", "decline", "decline_reason", "decline_back"}
+-_DRIVER_OFFER_ALLOWED_CMDS = {"accept", "decline", "decline_reason", "decline_back"}
++# Ordinary offer decisions; unrelated menu commands stay locked.
++_DRIVER_OFFER_ALLOWED_CMDS = {"accept", "decline", "decline_reason", "decline_back", "offer_eta", "offer_eta_custom"}
+ 
+ # The selected UI role may change while a driver still has a durable input
+ # state (for example, a person has both Driver and Dispatcher roles).  These
+ # states always belong to the driver's active workflow and must never be sent
+ # to the dispatcher handler just because the menu role changed in the meantime.
+ _DRIVER_OWNED_INPUT_STATES = {
++    States.D_OFFER_ETA,
++    States.D_BLACKLIST_ADD,
+     States.D_DELIVERY_PRICE,
+     States.D_CUSTOM_PRICE,
+     States.D_CAR_MODEL,
+@@ -1278,7 +1284,8 @@
+     if active_order_for(session, user):
+         return _menu_lock_notice(session, user)
+     _close_direct_driver_choice_menu(session, user)
+-    drivers = _direct_driver_candidates(session)
++    excluded = blacklist_service.excluded_driver_ids(session, user.id)
++    drivers = [driver for driver in _direct_driver_candidates(session) if driver.id not in excluded]
+     visible = drivers[:DIRECT_DRIVER_PAGE_SIZE]
+     if visible:
+         text_lines = ["👤 Выбор водителя:", ""]
+@@ -1439,6 +1446,7 @@
+     available = bool(
+         entry and entry.status == "waiting"
+         and driver and driver.has_role(ROLE_DRIVER)
++        and not blacklist_service.blocks(session, driver.id, user.id)
+         and driver.is_on_line and driver.driver_status == "online"
+         and not driver.is_blocked and lines.has_complete_car(driver)
+         and not active_order_for(session, driver, as_driver=True)
+@@ -3364,6 +3372,11 @@
+     # as an unrelated menu action and the driver sees no result.
+     if state == States.D_CUSTOM_PRICE and not cmd:
+         return customer_price_service.submit(session, user, text)
++    if state == States.D_OFFER_ETA and not cmd:
++        return accept_offer_eta(session, user, get_data(session, user.vk_id).get("order_id"), text)
++    if state == States.D_BLACKLIST_ADD and (cmd == "start" or text.casefold().strip() in ("меню", "начать", "/start", "start")):
++        reset(session, user.vk_id, States.D_MENU)
++        return show_main_menu(session, user)
+ 
+     # Do not let an expired, already-idle «Суточник» rejoin the line during
+     # the worker's short polling interval. Active/offered rides are deferred.
+@@ -3426,6 +3439,29 @@
+         return lines.show_line_menu(session, user)
+     if cmd == "contact_dispatcher":
+         return driver_contact_dispatcher(session, user)
++    if cmd == "blacklist":
++        return show_blacklist(session, user)
++    if cmd == "blacklist_add":
++        set_state(session, user.vk_id, States.D_BLACKLIST_ADD, {}, merge=False)
++        return vk.send_message(user.vk_id, "Пришлите ссылку на страницу клиента в VK (https://vk.ru/id123 или короткое имя).",
++                               keyboard=kb.blacklist_menu())
++    if cmd == "blacklist_remove_menu":
++        return show_blacklist_remove(session, user, payload.get("page", 1))
++    if cmd == "blacklist_remove":
++        return remove_blacklist(session, user, payload.get("vk_id"), payload.get("page", 1))
++    if cmd == "blacklist_close":
++        close_blacklist_remove(session, user)
++        return show_blacklist(session, user)
++    if cmd == "blacklist_rating":
++        return blacklist_from_rating(session, user, payload.get("order_id"))
++    if cmd == "offer_eta":
++        return accept_offer_eta(session, user, payload.get("order_id"), payload.get("minutes"))
++    if cmd == "offer_eta_custom":
++        return offer_eta_custom(session, user, payload.get("order_id"))
++    if state == States.D_BLACKLIST_ADD and not cmd:
++        return add_blacklist_link(session, user, text)
++
++
+     if cmd == "rate_passenger":
+         return driver_rate_passenger(session, user, payload["order_id"], payload["stars"])
+     if cmd == "skip_rate_passenger":
+@@ -3481,7 +3517,7 @@
+             session, user, payload.get("order_id")
+         )
+     if cmd == "accept":
+-        return driver_accept(session, user, payload["order_id"])
++        return offer_eta_custom_or_menu(session, user, payload.get("order_id"))
+     if cmd == "set_eta":
+         return driver_show_eta_menu(session, user)
+     if cmd == "eta_pick":
+@@ -4071,6 +4107,8 @@
+ 
+ 
+ def show_driver_info(session: Session, user: User) -> None:
++    close_blacklist_remove(session, user)
++    reset(session, user.vk_id, States.D_MENU)
+     """Show the saved car, payment details and review summary."""
+     car = user.car_full if user.car_full and user.car_full != "—" else "не указано"
+     payment = _payment_details_text(user) if _payment_details_ready(user) else "не указаны"
+@@ -4141,7 +4179,8 @@
+         page = 1
+     query = _pending_orders_query(session)
+     visible = [order for order in query.order_by(Order.created_at.asc(), Order.id.asc()).all()
+-               if parallel_orders.local_line_allows(order, user)]
++               if parallel_orders.local_line_allows(order, user)
++               and not blacklist_service.blocks(session, user.id, order.passenger_id)]
+     total = len(visible)
+     total_pages = max(1, (total + PENDING_ORDERS_PER_PAGE - 1) // PENDING_ORDERS_PER_PAGE)
+     page = min(page, total_pages)
+@@ -4174,7 +4213,9 @@
+     session: Session, driver: User, order: Order, *, parallel: bool = False
+ ) -> bool:
+     """Reserve an old manual claim and ask its passenger before ETA."""
+-    if order.dispatcher_id or order.actuality_confirmed or not _order_is_older_than_two_minutes(order):
++    if (order.dispatcher_id or order.actuality_confirmed
++            or delivery_service.is_partner_delivery(order)
++            or not claim_needs_actuality(order)):
+         return False
+     passenger = session.get(User, order.passenger_id)
+     if not passenger:
+@@ -4243,40 +4284,228 @@
+         user.is_on_line = True
+         user.driver_status = "online"
+ 
+-    previous_status = order.status
+-    timers.cancel("accept", order.id)
++    reserve_eta_offer(session, user, order)
++
++
++def claim_needs_actuality(order: Order) -> bool:
++    """Age at acceptance, not age when a delayed passenger answer arrives."""
++    created = getattr(order, "created_at", None)
++    accepted = getattr(order, "driver_accept_time", None) or time_utils.now()
++    if not created:
++        return False
++    if created.tzinfo is None:
++        created = created.replace(tzinfo=dt.timezone.utc)
++    if accepted.tzinfo is None:
++        accepted = accepted.replace(tzinfo=dt.timezone.utc)
++    return (accepted - created).total_seconds() > 120
++
++
++def offer_deadline_passed(session: Session, order: Order) -> bool:
++    deadline = getattr(order, "eta_offer_expires_at", None)
++    if deadline is not None:
++        if deadline.tzinfo is None:
++            deadline = deadline.replace(tzinfo=dt.timezone.utc)
++        return time_utils.now() >= deadline
++    job = session.query(ScheduledJob).filter(
++        ScheduledJob.job_key == f"accept:{order.id}",
++        ScheduledJob.status == "pending",
++    ).one_or_none()
++    # Missing timer is not permission to accept an unbounded/stale offer.
++    if job is None:
++        log.warning("Refused offer without durable deadline order=%s", order.id)
++        return True
++    deadline = job.run_at
++    if deadline.tzinfo is None:
++        deadline = deadline.replace(tzinfo=dt.timezone.utc)
++    return time_utils.now() >= deadline
++
++
++def _live_eta_offer(session: Session, user: User, order_id) -> Order | None:
++    try:
++        order_id = int(order_id)
++    except (TypeError, ValueError):
++        return None
++    order = session.query(Order).filter(Order.id == order_id).with_for_update().one_or_none()
++    if (not order or order.status != "searching" or order.offered_driver_id != user.id
++            or order.driver_id is not None or order.parallel_driver_id is not None
++            or offer_deadline_passed(session, order)):
++        return None
++    if blacklist_service.blocks(session, user.id, order.passenger_id):
++        return None
++    return order
++
++
++def offer_eta_custom_or_menu(session: Session, user: User, order_id) -> None:
++    order = _live_eta_offer(session, user, order_id)
++    if not order:
++        return vk.send_message(user.vk_id, "Заявка уже недоступна или время ответа истекло.")
++    return vk.send_message(user.vk_id, "Через сколько минут будете у клиента?",
++                           keyboard=kb.order_offer_keyboard(order.id, order.customer_price is not None))
++
++
++def offer_eta_custom(session: Session, user: User, order_id) -> None:
++    order = _live_eta_offer(session, user, order_id)
++    if not order:
++        return vk.send_message(user.vk_id, "Заявка уже недоступна или время ответа истекло.")
++    # Do not cancel or extend the original 60-second deadline while typing.
++    set_state(session, user.vk_id, States.D_OFFER_ETA, {"order_id": order.id}, merge=False)
++    vk.send_message(user.vk_id, "Введите целое число минут до прибытия (от 1 до 1440). Время на ответ — 60 секунд с получения заявки.")
++
++
++def accept_offer_eta(session: Session, user: User, order_id, value) -> None:
++    order = _live_eta_offer(session, user, order_id)
++    if not order:
++        return vk.send_message(user.vk_id, "Заявка уже недоступна или время ответа истекло.")
++    raw = str(value or "").strip()
++    if not re.fullmatch(r"[0-9]{1,4}(?:\s*мин\.?)?", raw, flags=re.IGNORECASE):
++        return vk.send_message(user.vk_id, "Введите целое число минут от 1 до 1440.")
++    eta = int(re.match(r"[0-9]+", raw).group())
++    if not 1 <= eta <= 1440:
++        return vk.send_message(user.vk_id, "Введите целое число минут от 1 до 1440.")
++    return driver_accept(session, user, order.id, notify_passenger=False, selected_eta=eta)
++
++
++def reserve_eta_offer(session: Session, user: User, order: Order, *, source: str = "pending") -> None:
++    """Chat/pending tap is a reservation only; the original FIFO timer owns expiry."""
++    if order.offered_driver_id == user.id and order.status == "searching":
++        return offer_eta_custom_or_menu(session, user, order.id)
++    if (order.offered_driver_id or order.driver_id or order.parallel_driver_id
++            or order.status not in PENDING_ORDER_STATUSES):
++        return vk.send_message(user.vk_id, "Заявку уже рассматривает другой водитель.")
++    if blacklist_service.blocks(session, user.id, order.passenger_id):
++        return vk.send_message(user.vk_id, "Заявка недоступна.")
++    previous = offered_order_for(session, user)
++    if previous and previous.id != order.id:
++        timers.cancel("accept", previous.id)
++        order_service.finalize_offer_message(session, previous, "Заявка передана следующему водителю.")
++        order_service.clear_current_offer(session, previous)
++        queue_service.release_offer(session, user)
++        session.flush()
++    was_offline = not bool(user.is_on_line)
++    if was_offline or user.driver_status == "away":
++        queue_service.join_queue(session, user, lines.city_id_by_name(session, user.current_line))
++        user.is_on_line = True
++        session.flush()
++    if not queue_service.mark_offered(session, user):
++        return vk.send_message(user.vk_id, "Сейчас заявка недоступна. Обновите меню.")
+     timers.cancel("driver_chat", order.id)
+     timers.cancel("dispatcher_unclaimed", order.id)
+     passenger_queue.remove(session, order.id)
+-    order.offered_driver_id = None
+-    order.parallel_driver_id = None
+-    order.driver_id = user.id
+-    order.status = "assigned"
+-    order.driver_accept_time = time_utils.now()
+-    if order.customer_price is not None and order.agreed_price is None:
+-        order.agreed_price = order.customer_price
+-    order.chat_driver_was_offline = False
+-    user.driver_missed_offers = 0
+-    queue_service.mark_assigned(session, user)
+-    if previous_status == "chat_search":
+-        order_service.finalize_chat_order_notice(session, order, user)
+-    audit.record(session, "driver_pending_take", f"order={order.id} driver={user.id}")
+-
+-    if request_claim_actuality(session, user, order, parallel=False):
++    order.status = "searching"
++    order.offered_driver_id = user.id
++    order.eta_offer_source = source
++    order.chat_driver_was_offline = was_offline
++    order.eta_offer_expires_at = time_utils.now() + dt.timedelta(seconds=60)
++    set_state(session, user.vk_id, States.D_OFFER, {"order_id": order.id}, merge=False)
++    text = f"📌 {order_service.order_text(order)}\n"
++    passenger = session.get(User, order.passenger_id) if order.passenger_id else None
++    if passenger and not order.dispatcher_id:
++        text += f"\nОт кого: {_vk_label(passenger)} {order_service.passenger_rating_text(passenger)}"
++    if order.customer_price is not None:
++        text += f"\n💰 Цена клиента: {float(order.customer_price):.0f} ₽"
++    if order.comment:
++        text += f"\n💬 Комментарий: {order.comment}"
++    text += order_service._extras_summary(session, order)
++    order.offer_outbox_id = vk.send_tracked_message(
++        user.vk_id, text, keyboard=kb.order_offer_keyboard(order.id, order.customer_price is not None),
++        attachment=vk.prepare_voice_attachment(user.vk_id, order.voice_attachment))
++    if not order.offer_outbox_id:
++        raise RuntimeError("Could not enqueue driver ETA offer")
++    order_id, driver_id = order.id, user.id
++    timers.schedule("accept", order_id, 60, lambda: order_service._accept_timeout(order_id, driver_id))
++    if previous and previous.id != order.id:
++        order_service.offer_to_next_driver(session, previous, {user.id})
++
++
++def close_blacklist_remove(session: Session, user: User) -> None:
++    data = get_data(session, user.vk_id)
++    pointer = data.get("blacklist_remove_outbox_id")
++    if pointer:
++        from . import outbox_service
++        outbox_service.finalize_tracked_message(session, pointer, "")
++        data.pop("blacklist_remove_outbox_id", None)
++        set_state(session, user.vk_id, States.D_MENU, data, merge=False)
++
++
++def _blacklist_clients(session: Session, user: User):
++    return session.query(DriverBlacklist.passenger_vk_id, User.full_name).outerjoin(
++        User, User.vk_id == DriverBlacklist.passenger_vk_id).filter(
++        DriverBlacklist.driver_id == user.id).order_by(DriverBlacklist.id.asc()).all()
++
++
++def show_blacklist(session: Session, user: User) -> None:
++    close_blacklist_remove(session, user)
++    reset(session, user.vk_id, States.D_MENU)
++    clients = _blacklist_clients(session, user)
++    text = "🚫 Ваш чёрный список:\n\n"
++    if not clients:
++        text += "Список пуст."
++    for vk_id, name in clients:
++        line = f"• [id{vk_id}|{name or ('id' + str(vk_id))}]\n"
++        if len(text) + len(line) > 3000:
++            vk.send_message(user.vk_id, text, keyboard=kb.blacklist_menu())
++            text = "🚫 Чёрный список (продолжение):\n\n"
++        text += line
++    vk.send_message(user.vk_id, text, keyboard=kb.blacklist_menu())
++
++
++def show_blacklist_remove(session: Session, user: User, page=1) -> None:
++    close_blacklist_remove(session, user)
++    clients = _blacklist_clients(session, user)
++    if not clients:
++        return show_blacklist(session, user)
++    pages = max(1, (len(clients) + 6) // 7)
++    try:
++        page = min(pages, max(1, int(page)))
++    except (TypeError, ValueError):
++        page = 1
++    pointer = vk.send_tracked_message(
++        user.vk_id, "Нажмите на клиента, чтобы убрать его из вашего чёрного списка:",
++        keyboard=kb.blacklist_remove_keyboard(clients[(page - 1) * 7:page * 7], page, pages))
++    set_state(session, user.vk_id, States.D_MENU,
++              {"blacklist_remove_outbox_id": pointer}, merge=False)
++
++
++def remove_blacklist(session: Session, user: User, vk_id, page=1) -> None:
++    try:
++        vk_id = int(vk_id)
++    except (TypeError, ValueError):
++        return show_blacklist_remove(session, user, page)
++    session.query(DriverBlacklist).filter_by(driver_id=user.id, passenger_vk_id=vk_id).delete()
++    session.flush()
++    vk.send_message(user.vk_id, "✅ Клиент убран из вашего чёрного списка.", keyboard=kb.blacklist_menu())
++    show_blacklist_remove(session, user, page)
++
++
++def add_blacklist_link(session: Session, user: User, text: str) -> None:
++    if not re.fullmatch(r"(?:https?://)?(?:(?:www|m)\.)?vk\.(?:ru|com)/[A-Za-z0-9_.]+/?(?:\?[^\s]*)?", text.strip(), re.IGNORECASE):
++        return vk.send_message(user.vk_id, "Нужна ссылка на личную страницу VK, например https://vk.ru/id123.",
++                               keyboard=kb.blacklist_menu())
++    vk_id = vk.resolve_user_id(text)
++    if not vk_id or vk_id <= 0 or vk_id == user.vk_id:
++        return vk.send_message(user.vk_id, "Не удалось найти клиента по этой ссылке. Проверьте ссылку и повторите.",
++                               keyboard=kb.blacklist_menu())
++    blacklist_service.add(session, user, vk_id)
++    vk.send_message(user.vk_id, "✅ Клиент добавлен в ваш чёрный список.")
++    show_blacklist(session, user)
++
++
++def blacklist_from_rating(session: Session, user: User, order_id) -> None:
++    try:
++        order_id = int(order_id)
++    except (TypeError, ValueError):
+         return
+-
+-    if delivery_service.is_delivery(order):
+-        return delivery_service.request_price(session, user, order)
+-    _show_eta_menu(
+-        session,
+-        user,
+-        order,
+-        intro=(
+-            f"✅ Вы взяли заявку #{order.number} ({order_service.order_type_label(order)})\n"
+-            f"{_order_requester_line(session, order)}\n"
+-            f"Ваша заявка: {order_service.order_text(order)}"
+-        ),
+-    )
++    order = session.query(Order).filter(Order.id == order_id).with_for_update().one_or_none()
++    if (not order or order.driver_id != user.id or order.status != "completed"
++            or not order.driver_rating_prompt_outbox_id or order.dispatcher_id):
++        return
++    passenger = session.get(User, order.passenger_id) if order.passenger_id else None
++    if not passenger:
++        return
++    blacklist_service.add(session, user, passenger.vk_id)
++    _finish_rating_prompt(session, order, True, "🚫 Клиент добавлен в ваш чёрный список. Оценка не выставлена.")
++    # Rating is optional and non-blocking: preserve queue, current trip and FSM.
++    vk.send_message(user.vk_id, "✅ Клиент добавлен в ваш чёрный список. Оценка не выставлена.")
+ 
+ 
+ def _commission_for_order(session: Session, order_id: int) -> float:
+@@ -4413,6 +4642,7 @@
+     *,
+     notify_passenger: bool = True,
+     reserved_price_offer: bool = False,
++    selected_eta: int | None = None,
+ ) -> None:
+     order = session.query(Order).filter(Order.id == order_id).with_for_update().one_or_none()
+     if (not order or order.status not in ("searching", "created")
+@@ -4423,12 +4653,19 @@
+         return show_main_menu(session, user)
+     if not parallel_orders.local_line_allows(order, user):
+         return vk.send_message(user.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
+-    # Requirement 5/7: a driver blocked for cancelling cannot take new orders.
+-    if driver_block_service.is_blocked(user):
++    if blacklist_service.blocks(session, user.id, order.passenger_id):
++        return vk.send_message(user.vk_id, "Заявка недоступна.")
++    if selected_eta is not None and offer_deadline_passed(session, order):
++        return vk.send_message(user.vk_id, "Время ответа истекло. Заявка передаётся следующему водителю.")
++
++
++    from_chat = getattr(order, "eta_offer_source", None) == "chat"
++    # Preserve the existing chat-claim exceptions; ordinary FIFO checks stay intact.
++    if not from_chat and driver_block_service.is_blocked(user):
+         vk.send_message(user.vk_id, msg(session, "msg_driver_blocked", until=driver_block_service.blocked_until_text(user)))
+         return show_main_menu(session, user)
+     # A historical/stale queue row must never let an incomplete car accept an offer.
+-    if not reserved_price_offer and not lines.has_complete_car(user):
++    if not from_chat and not reserved_price_offer and not lines.has_complete_car(user):
+         timers.cancel("accept", order.id)
+         order_service.add_decline(session, order, user.id, "car_missing")
+         order_service.finalize_offer_message(
+@@ -4464,7 +4701,7 @@
+         )
+         return order_service.offer_to_next_driver(session, order)
+     # Req 1.1: a driver must be on a line to accept orders.
+-    if not reserved_price_offer and (not user.is_on_line or not user.current_line):
++    if not from_chat and not reserved_price_offer and (not user.is_on_line or not user.current_line):
+         vk.send_message(user.vk_id, msg(session, "msg_need_line"), keyboard=kb.driver_menu(on_line=False, show_role_switch=can_switch_role(user)))
+         return
+     timers.cancel("accept", order.id)
+@@ -4477,8 +4714,20 @@
+         order.agreed_price = order.customer_price
+     user.driver_missed_offers = 0
+     queue_service.mark_assigned(session, user)
+-    order_service.finalize_offer_message(session, order, "✅ Вы приняли заявку.")
++    if selected_eta is None:
++        order_service.finalize_offer_message(session, order, "✅ Вы приняли заявку.")
+     audit.record(session, "driver_accept", f"order={order.id} driver={user.id}")
++    if selected_eta is not None:
++        if order.chat_notice_outbox_id:
++            order_service.finalize_chat_order_notice(session, order, user)
++        # Store the driver's choice while an old request awaits its passenger.
++        order.arrival_eta = selected_eta
++        if claim_needs_actuality(order):
++            order_service.finalize_offer_message(session, order, f"⏰ Вы выбрали {selected_eta} мин.")
++        if request_claim_actuality(session, user, order):
++            return
++        if not delivery_service.is_delivery(order):
++            return _apply_eta(session, user, order, selected_eta)
+     # V76: the passenger hears about the driver right after the accept press.
+     if notify_passenger:
+         order_service.notify_driver_found(session, order)
+@@ -4988,7 +5237,7 @@
+ 
+     # Remove the time-choice buttons from the original message immediately.
+     order_service.finalize_offer_message(
+-        session, order, f"✅ Выбрано время прибытия: {eta} мин."
++        session, order, f"⏰ Вы выбрали {eta} мин."
+     )
+     order.arrival_eta = eta
+     if order.driver_departed_at is None:
+@@ -5033,6 +5282,8 @@
+                 _driver_card(user) if is_partner_delivery
+                 else order_service.departure_driver_card_text(assigned_driver)
+             )
++            if not claim_needs_actuality(order):
++                order.actuality_confirmed = True
+             if order.actuality_confirmed:
+                 order.departure_prompt_outbox_id = None
+                 vk.send_message(
+@@ -7797,6 +8048,8 @@
+     from . import parallel_orders
+     if not parallel_orders.local_line_allows(order, user):
+         return vk.send_message(user.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
++    if blacklist_service.blocks(session, user.id, order.passenger_id):
++        return vk.send_message(user.vk_id, "Заявка недоступна.")
+     active = active_order_for(session, user, as_driver=True)
+     if active and active.id != order.id:
+         if parallel_orders.has_pending(session, user):
+@@ -7830,102 +8083,17 @@
+         _chat_claim_reply(session, user, f"заявка №{order.number} уже закрыта.")
+         log.warning("Chat claim rejected: order=%s status=%s", order.id, order.status)
+         return vk.send_message(user.vk_id, "Заявка уже недоступна.")
+-    # A live offer must not block the chat: it is handed to the next driver
+-    # right after this request is locked onto the current one.
+-    pending_offer = offered_order_for(session, user)
+-    if pending_offer is not None and pending_offer.id == order.id:
+-        pending_offer = None
+-    if pending_offer is not None:
+-        timers.cancel("accept", pending_offer.id)
+-        pending_offer.offered_driver_id = None
+-        queue_service.release_offer(session, user)
+-        reset(session, user.vk_id, States.D_MENU)
+-        session.flush()
+-    # Incomplete car details are only a reminder now: they must never cancel a
+-    # claim and leave the request hanging in the chat.
++    if blacklist_service.blocks(session, user.id, order.passenger_id):
++        return vk.send_message(user.vk_id, "Заявка недоступна.")
++    # A public chat tap only reserves the offer. ETA confirms it within 60 seconds.
++    if order.offered_driver_id and order.offered_driver_id != user.id:
++        return vk.send_message(user.vk_id, "Заявку уже рассматривает другой водитель.")
+     if not lines.has_complete_car(user):
+-        vk.send_message(
+-            user.vk_id,
+-            "Заявка закреплена за вами. Пожалуйста, заполните «Моя машина»: марка, цвет и госномер.",
+-        )
+-        log.warning("Chat claim with incomplete car order=%s driver=%s", order.id, user.id)
+-    was_offline = not bool(user.is_on_line)
+-    if was_offline or user.driver_status == "away":
+-        queue_service.join_queue(session, user, lines.city_id_by_name(session, user.current_line))
+-        user.is_on_line = True
+-    timers.cancel("driver_chat", order.id)
+-    timers.cancel("dispatcher_unclaimed", order.id)
+-    timers.cancel("accept", order.id)
+-    passenger_queue.remove(session, order.id)
+-    chat_outbox_id = order.chat_notice_outbox_id
+-    order.offered_driver_id = None
+-    order.driver_id = user.id
+-    order.status = "assigned"
+-    order.driver_accept_time = time_utils.now()
+-    if order.customer_price is not None and order.agreed_price is None:
+-        order.agreed_price = order.customer_price
+-    order.chat_driver_was_offline = was_offline
+-    user.driver_missed_offers = 0
+-    queue_service.mark_assigned(session, user)
+-    # Persist the assignment before any VK work: a failed edit or notification
+-    # must never roll the claim back.
+-    session.flush()
+-    if pending_offer is not None:
+-        log.warning(
+-            "Offer %s released: driver %s claimed chat order %s",
+-            pending_offer.id, user.id, order.id,
+-        )
+-        vk.send_message(
+-            user.vk_id,
+-            f"Заявка #{pending_offer.number} передана следующему водителю: вы взяли заявку №{order.number} из чата.",
+-        )
+-        try:
+-            order_service.offer_to_next_driver(session, pending_offer)
+-        except Exception as exc:  # noqa: BLE001
+-            log.exception("Could not re-offer order %s: %s", pending_offer.id, exc)
+-    try:
+-        order_service.finalize_chat_order_notice(session, order, user)
+-    except Exception as exc:  # noqa: BLE001
+-        log.exception("Chat notice finalize failed for order %s: %s", order.id, exc)
+-    audit.record(session, "driver_chat_take", f"order={order.id} driver={user.id} chat_outbox={chat_outbox_id}")
+-    passenger = session.get(User, order.passenger_id)
+-    if _is_dispatcher_order(order):
+-        # A dispatcher does not use the passenger confirmation FSM. The driver
+-        # chooses ETA immediately; _apply_eta sends the dispatcher one complete
+-        # notification with driver, order and arrival time.
+-        _show_eta_menu(
+-            session,
+-            user,
+-            order,
+-            intro=(
+-                f"✅ Вы закрепили за собой диспетчерскую заявку №{order.number}.\n"
+-                f"{_order_requester_line(session, order)}\n"
+-                f"Ваша заявка: {order_service.order_text(order)}"
+-            ),
+-        )
+-        return
+-    if order_service.driver_chat_reason_label(session, order):
+-        _show_eta_menu(
+-            session,
+-            user,
+-            order,
+-            intro=(
+-                f"✅ Вы взяли заявку №{order.number} из водительского чата.\n"
+-                f"{_order_requester_line(session, order)}\n"
+-                f"Ваша заявка: {order_service.order_text(order)}"
+-            ),
+-        )
+-        return
+-    if passenger:
+-        order.chat_actuality_prompt_outbox_id = vk.send_tracked_message(
+-            passenger.vk_id,
+-            f"Водитель нашёлся. Ваша заявка актуальна?\n{order_service.order_text(order)}",
+-            keyboard=kb.chat_order_actual_keyboard(order.id),
+-        )
+-        timers.schedule("chat_actual", order.id, 60, lambda: chat_actuality_timeout(order.id))
+-        set_state(session, passenger.vk_id, States.P_CHAT_ORDER_CONFIRM, {"order_id": order.id}, merge=False)
+-    vk.send_message(user.vk_id, "Ждём подтверждение актуальности заявки от пассажира.")
+-    set_state(session, user.vk_id, States.D_CHAT_ORDER_WAIT, {"order_id": order.id}, merge=False)
++        vk.send_message(user.vk_id, "Пожалуйста, заполните «Моя машина»: марка, цвет и госномер.")
++    return reserve_eta_offer(session, user, order, source="chat")
++
++
++
+ 
+ 
+ def passenger_chat_order_actual(session: Session, user: User, order_id, actual: bool) -> None:
+@@ -8014,16 +8182,17 @@
+             if order.status == "parallel_assigned":
+                 return parallel_orders.prompt_eta_after_actuality(session, driver, order)
+             return driver_show_eta_menu(session, driver)
++        order.actuality_confirmed = True
+         if delivery_service.is_delivery(order):
+             vk.send_message(user.vk_id, "Водитель рассчитывает стоимость доставки.")
+             return delivery_service.request_price(session, driver, order)
+-        vk.send_message(
+-            driver.vk_id,
+-            f"Пассажир: {_vk_label(user)} подтвердил: заявка актуальна.\n"
+-            f"Текст заявки: {order_service.order_text(order)}\n"
+-            "Нажмите «Выезжаю».",
+-            keyboard=kb.driver_depart_keyboard(order.id),
+-        )
++        order.actuality_confirmed = True
++        if order.arrival_eta:
++            return _apply_eta(session, driver, order, order.arrival_eta)
++        else:
++            _show_eta_menu(session, driver, order,
++                           intro=f"Пассажир: {_vk_label(user)} подтвердил: заявка актуальна.\n"
++                                 f"📌 {order_service.order_text(order)}")
+     vk.send_message(user.vk_id, "Спасибо! Водитель получил подтверждение.", keyboard=kb.passenger_waiting_keyboard())
+     set_state(session, user.vk_id, States.P_IN_RIDE, {"order_id": order.id}, merge=False)
+ 
+@@ -8088,7 +8257,6 @@
+     order = session.get(Order, int(order_id)) if order_id else None
+     if not order or order.driver_id != user.id or order.status != "assigned":
+         return vk.send_message(user.vk_id, "Заявка уже недоступна.")
+-    vk.send_message(user.vk_id, "Вы подтвердили выезд. Укажите время прибытия.")
+     _show_eta_menu(session, user, order)
+ 
+ 
+@@ -8118,6 +8286,9 @@
+         .limit(30)
+         .all()
+     )
++    excluded = blacklist_service.excluded_driver_ids
++    orders = [order for order in orders if user.id not in excluded(session, order.passenger_id)]
++    bookings = [booking for booking in bookings if user.id not in excluded(session, booking.passenger_id)]
+     if not orders and not bookings:
+         vk.send_message(user.vk_id, "Сейчас нет заявок без водителя.")
+         return
+--- a/bot/keyboards.py
++++ b/bot/keyboards.py
+@@ -416,10 +416,7 @@
+ 
+ 
+ def driver_depart_keyboard(order_id: int) -> str:
+-    return keyboard(
+-        [[_btn("🚕 Выезжаю", GREEN, {"cmd": "chat_depart", "order_id": order_id})]],
+-        inline=True,
+-    )
++    return eta_keyboard([1, 3, 5, 10, 15, 25])
+ 
+ 
+ def review_comment_keyboard(review_id: int) -> str:
+@@ -524,9 +521,12 @@
+ 
+ 
+ def passenger_rating_keyboard(order_id: int) -> str:
+-    """Requirement 3: driver rates the passenger (1-5) after the ride."""
+-    rows = [[_btn("⭐" * i, WHITE, {"cmd": "rate_passenger", "order_id": order_id, "stars": i})]
+-            for i in range(5, 0, -1)]
++    """Keep blacklist on a separate row BELOW one star (VK inline: six rows)."""
++    def star(value):
++        return _btn("⭐" * value, WHITE,
++                    {"cmd": "rate_passenger", "order_id": order_id, "stars": value})
++    rows = [[star(5), star(4)], [star(3)], [star(2)], [star(1)]]
++    rows.append([_btn("🚫 Чёрный список", RED, {"cmd": "blacklist_rating", "order_id": order_id})])
+     rows.append([_btn("Пропустить", WHITE, {"cmd": "skip_rate_passenger", "order_id": order_id})])
+     return keyboard(rows, inline=True)
+ 
+@@ -559,10 +559,7 @@
+             _btn("🛡 Уйти с линии", RED, {"cmd": "driver_offline"}),
+             _btn("☕ Отлучиться", WHITE, {"cmd": "driver_away"}),
+         ])
+-        rows.append([
+-            _btn("💰 Мои доходы", WHITE, {"cmd": "earnings"}),
+-            _btn("⭐ Мои отзывы", WHITE, {"cmd": "reviews"}),
+-        ])
++        rows.append([_btn("📋 Мои сведения", WHITE, {"cmd": "driver_info"})])
+     else:
+         rows = [
+             [
+@@ -596,9 +593,35 @@
+         [_btn("🚫 Ложные вызовы", WHITE, {"cmd": "fake_calls"})],
+         [_btn("💰 Мои доходы", WHITE, {"cmd": "earnings"})],
+         [_btn("⭐ Мои отзывы", WHITE, {"cmd": "reviews"})],
++        [_btn("🚫 Чёрный список", WHITE, {"cmd": "blacklist"})],
+         [_btn("📱 Подключить приложение", BLUE, {"cmd": "connect_driver_app"})],
+         [_btn("⬅️ Вернуться в главное меню", WHITE, {"cmd": "start"})],
+     ])
++
++
++def blacklist_menu() -> str:
++    return keyboard([
++        [_btn("➕ Добавить в ЧС", WHITE, {"cmd": "blacklist_add"})],
++        [_btn("➖ Убрать из ЧС", WHITE, {"cmd": "blacklist_remove_menu"})],
++        [_btn("⬅️ Мои сведения", WHITE, {"cmd": "driver_info"})],
++    ])
++
++
++def blacklist_remove_keyboard(clients, page=1, pages=1) -> str:
++    rows = [[_btn((name or f"id{vk_id}")[:40], WHITE,
++                  {"cmd": "blacklist_remove", "vk_id": vk_id, "page": page})]
++            for vk_id, name in clients]
++    nav = []
++    if page > 1:
++        nav.append(_btn("⬅️ Назад", WHITE, {"cmd": "blacklist_remove_menu", "page": page - 1}))
++    if page < pages:
++        nav.append(_btn("Вперёд ➡️", WHITE, {"cmd": "blacklist_remove_menu", "page": page + 1}))
++    if nav:
++        rows.append(nav)
++    rows.append([_btn("Закрыть", WHITE, {"cmd": "blacklist_close"})])
++    return keyboard(rows, inline=True)
++
++
+ 
+ 
+ def missed_offer_timeout_keyboard() -> str:
+@@ -814,10 +837,15 @@
+ 
+ 
+ def order_offer_keyboard(order_id: int, has_customer_price: bool = False) -> str:
+-    rows = [
+-            [_btn("✅ Поехать", GREEN, {"cmd": "accept", "order_id": order_id})],
+-            [_btn("🚫 Отказаться", RED, {"cmd": "decline", "order_id": order_id})],
+-        ]
++    rows = []
++    options = [1, 3, 5, 10, 15, 25]
++    for index in range(0, len(options), 2):
++        rows.append([_btn(f"{minutes} мин", BLUE,
++                         {"cmd": "offer_eta", "order_id": order_id, "minutes": minutes})
++                     for minutes in options[index:index + 2]])
++    rows.append([_btn("✏️ Индивидуальное время", WHITE,
++                      {"cmd": "offer_eta_custom", "order_id": order_id})])
++    rows.append([_btn("🚫 Отказаться", RED, {"cmd": "decline", "order_id": order_id})])
+     return keyboard(rows, inline=True)
+ 
+ 
+--- a/bot/order_service.py
++++ b/bot/order_service.py
+@@ -1,5 +1,7 @@
+ """High-level order lifecycle helpers shared by handlers and timers."""
+ from __future__ import annotations
++
++from . import blacklist_service
+ 
+ import datetime as dt
+ import json
+@@ -476,7 +478,8 @@
+     return queue_service.has_waiting_driver(
+         session,
+         pickup_line,
+-        exclude_driver_ids=_declined_ids(session, order),
++        exclude_driver_ids=sorted(set(_declined_ids(session, order)) |
++                                  blacklist_service.excluded_driver_ids(session, order.passenger_id)),
+         line_scope=line_scope,
+     )
+ 
+@@ -526,6 +529,10 @@
+     from . import parallel_orders
+     if not parallel_orders.local_line_allows(order, driver):
+         return False
++    if blacklist_service.blocks(session, driver.id, order.passenger_id):
++        return False
++
++
+     entry.status = "offered"
+     order.status = "searching"
+     _set_current_offer(session, order, driver.id)
+@@ -539,15 +546,14 @@
+     )
+ 
+     text = (
+-        f"🔔 Персональная заявка #{order.number} ({order_type_label(order)})\n"
+-        f"Пассажир выбрал вас.\nВаша заявка: {order_text(order)}"
++        f"📌 {order_text(order)}\n\nПассажир выбрал вас."
+     )
+     if order.customer_price is not None:
+         text += f"\n💰 Цена клиента: {float(order.customer_price):.0f} ₽"
+     creator = session.get(User, order.passenger_id)
+     if creator:
+         full_name = creator.full_name or ("id" + str(creator.vk_id))
+-        text += "\n👤 От кого: [id%s|%s] %s" % (
++        text += "\nОт кого: [id%s|%s] %s" % (
+             creator.vk_id, full_name, passenger_rating_text(creator)
+         )
+     if order.actuality_confirmed:
+@@ -575,11 +581,9 @@
+     from . import push_service
+     push_event = "customer_price" if order.customer_price is not None and not order.dispatcher_id else ("dispatcher_order" if order.dispatcher_id else "new_order")
+     push_service.send(session, driver.id, push_event, order)
+-    timeout = (
+-        30
+-        if order.customer_price is not None and not order.dispatcher_id
+-        else get_int(session, "driver_accept_timeout", 60)
+-    )
++    order.eta_offer_source = "fifo"
++    order.eta_offer_expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=60)
++    timeout = 60
+     order_id = order.id
+     driver_id = driver.id
+     timers.schedule(
+@@ -626,7 +630,8 @@
+     # The previous driver no longer holds this request: drop their notices.
+     clear_offer_notice(session, order)
+     declined = _declined_ids(session, order)
+-    excluded = set(declined) | set(temporary_exclude_driver_ids or ())
++    excluded = (set(declined) | set(temporary_exclude_driver_ids or ())
++                | blacklist_service.excluded_driver_ids(session, order.passenger_id))
+     from . import parallel_orders
+     pickup_line = parallel_orders.free_line_city(order) or "Горнозаводск"
+     route_city = parallel_orders.route_priority_city(order)
+@@ -681,7 +686,7 @@
+         driver.id,
+     )
+ 
+-    text = f"🔔 Новая заявка #{order.number} ({order_type_label(order)})\nВаша заявка: {order_text(order)}"
++    text = f"📌 {order_text(order)}\n"
+     if order.customer_price is not None:
+         text += f"\n💰 Цена клиента: {float(order.customer_price):.0f} ₽"
+     if order.actuality_confirmed:
+@@ -695,7 +700,7 @@
+         text += f"\nПричина отказа предыдущего водителя: {reason_title}"
+     if creator and not _is_dispatcher_order(order):
+         _full = creator.full_name or ("id" + str(creator.vk_id))
+-        text += "\n👤 От кого: [id%s|%s] %s" % (
++        text += "\nОт кого: [id%s|%s] %s" % (
+             creator.vk_id, _full, passenger_rating_text(creator)
+         )
+     if order.comment:
+@@ -734,11 +739,9 @@
+ 
+     # If the driver ignores the offer for the admin-configured interval, remove
+     # them from the line immediately so they cannot delay following requests.
+-    timeout = (
+-        30
+-        if order.customer_price is not None and not order.dispatcher_id
+-        else get_int(session, "driver_accept_timeout", 60)
+-    )
++    order.eta_offer_source = "fifo"
++    order.eta_offer_expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=60)
++    timeout = 60
+     order_id = order.id
+     driver_id = driver.id
+     timers.schedule(
+@@ -771,6 +774,12 @@
+         )
+         if order is None or order.status not in ("searching",):
+             return
++        deadline = getattr(order, "eta_offer_expires_at", None)
++        if deadline is not None:
++            if deadline.tzinfo is None:
++                deadline = deadline.replace(tzinfo=dt.timezone.utc)
++            if dt.datetime.now(dt.timezone.utc) < deadline:
++                return
+         current = _current_offer(session, order)
+         if current != driver_id:
+             return  # already moved on
+@@ -781,11 +790,7 @@
+             queue_service.leave_queue(session, driver)
+             driver.is_on_line = False
+             driver.driver_status = "offline"
+-            timeout_seconds = (
+-                30
+-                if order.customer_price is not None and not order.dispatcher_id
+-                else get_int(session, "driver_accept_timeout", 60)
+-            )
++            timeout_seconds = 60
+             timeout_text = (
+                 f"Вы не ответили на заявку за {timeout_seconds} секунд. "
+                 "Вас сняли с линии."
+@@ -840,17 +845,6 @@
+             from . import passenger_queue
+             passenger_queue.try_promote(session)
+             return
+-        # Passenger-priced and dispatcher-created orders get one ordinary
+-        # offer first. Only after the driver ignores it do they become a
+-        # shared-chat request addressed to all drivers.
+-        from . import parallel_orders
+-        if (order.customer_price is not None or order.dispatcher_id) and not parallel_orders.local_village_line(order):
+-            order.status = "created"
+-            session.flush()
+-            publish_direct_to_requests_chat(session, order)
+-            from . import passenger_queue
+-            passenger_queue.try_promote(session)
+-            return
+         # This exclusion applies only to this hand-off and is not persisted as
+         # a refusal. A later pass may offer the same active request again.
+         offer_to_next_driver(session, order, {driver_id})
+--- a/bot/parallel_orders.py
++++ b/bot/parallel_orders.py
+@@ -1,5 +1,7 @@
+ """Waiting orders that a busy driver can reserve for the next ride."""
+ from __future__ import annotations
++
++from . import blacklist_service
+ 
+ import json
+ import re
+@@ -257,9 +259,12 @@
+         # the free-driver destination.
+         if is_route_fallback(order):
+             return queue_service.has_waiting_driver(
+-                session, "Горнозаводск", line_scope="exact"
++                session, "Горнозаводск", line_scope="exact",
++                exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id)),
+             )
+-        return queue_service.has_waiting_driver(session, city, line_scope="exact")
++        return queue_service.has_waiting_driver(
++            session, city, line_scope="exact",
++            exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id)))
+     return order_service.has_eligible_waiting_driver(session, order)
+ 
+ 
+@@ -293,7 +298,8 @@
+ def has_available_for_current(session: Session, current: Order) -> bool:
+     """Whether the active driver's menu should show a green parallel indicator."""
+     driver = session.get(User, current.driver_id) if current.driver_id else None
+-    return any(local_line_allows(row, driver) for row in
++    return any(local_line_allows(row, driver)
++               and not blacklist_service.blocks(session, current.driver_id, row.passenger_id) for row in
+                _destination_restricted_orders(current, available(session)))
+ 
+ 
+@@ -326,6 +332,7 @@
+         and current.driver_id not in offered_driver_ids
+         and current.driver_id not in excluded_driver_ids
+         and not current.parallel_auto_offers_disabled
++        and not blacklist_service.blocks(session, current.driver_id, order.passenger_id)
+         and local_line_allows(order, session.get(User, current.driver_id))
+         for current in current_orders
+     )
+@@ -635,6 +642,8 @@
+         or driver_id in excluded_driver_ids
+     ):
+         return False
++    if blacklist_service.blocks(session, driver_id, order.passenger_id):
++        return False
+     if not local_line_allows(order, session.get(User, driver_id)):
+         return False
+     route = current.route_text or current.address_to
+@@ -838,7 +847,8 @@
+             attachment=vk.prepare_voice_attachment(driver.vk_id, reserved.voice_attachment),
+         )
+     rows = [row for row in _destination_restricted_orders(current, available(session))
+-            if local_line_allows(row, driver)]
++            if local_line_allows(row, driver)
++            and not blacklist_service.blocks(session, driver.id, row.passenger_id)]
+     if not rows:
+         from .handlers import _driver_ride_kb
+         return vk.send_message(driver.vk_id, "Свободных параллельных заявок пока нет.",
+@@ -906,6 +916,8 @@
+             "Эта заявка уже отменена или её взял другой водитель."
+         )
+         return vk.send_message(driver.vk_id, message)
++    if blacklist_service.blocks(session, driver.id, order.passenger_id):
++        return vk.send_message(driver.vk_id, "Заявка недоступна.")
+     if not local_line_allows(order, driver):
+         return vk.send_message(driver.vk_id, "Эта заявка доступна только водителям соответствующей линии.")
+     if require_live_offer and (
+@@ -951,14 +963,13 @@
+         return
+     passenger = session.get(User, order.passenger_id)
+     if passenger and not order.dispatcher_id:
+-        # Ask even for a newly created parallel request, without blocking the
+-        # driver's choice of ETA or affecting the ongoing ride.
++        order.actuality_confirmed = True
++        # Fresh parallel requests notify the passenger without asking actuality.
+         order.departure_prompt_outbox_id = vk.send_tracked_message(
+             passenger.vk_id,
+             "Водитель завершает текущую поездку и затем поедет к вам.\n"
+             "⚠️ При отмене после перехода водителя к заявке или спустя 2 минуты "
+-            "после её принятия будет ложный вызов.\nВы ждёте машинку?",
+-            keyboard=kb.passenger_departure_keyboard(order.id),
++            "после её принятия будет ложный вызов.",
+         )
+     timers.schedule("parallel_eta", order.id, 120, lambda: _eta_timeout(order.id))
+     route = order.route_text or f"{order.address_from} — {order.address_to}"
+--- a/bot/passenger_queue.py
++++ b/bot/passenger_queue.py
+@@ -9,6 +9,8 @@
+ The queue is a strict FIFO ordered by ``position`` (creation order).
+ """
+ from __future__ import annotations
++
++from . import blacklist_service
+ 
+ import datetime as dt
+ import threading
+@@ -146,7 +148,8 @@
+     free_city = parallel_orders.free_line_city(order)
+     if route_city:
+         if queue_service.has_waiting_driver(
+-            session, route_city, line_scope="exact"
++            session, route_city, line_scope="exact",
++                exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id))
+         ):
+             passenger = session.get(User, order.passenger_id)
+             if passenger and not order.dispatcher_id:
+@@ -304,10 +307,12 @@
+                 line_scope = "exact"
+                 line_name = "Горнозаводск"
+                 has_driver = queue_service.has_waiting_driver(
+-                    session, line_name, line_scope="exact"
++                    session, line_name, line_scope="exact",
++                    exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id))
+                 )
+             elif route_city and queue_service.has_waiting_driver(
+-                session, route_city, line_scope="exact"
++                session, route_city, line_scope="exact",
++                exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id))
+             ):
+                 line_scope = "exact"
+                 line_name = route_city
+@@ -442,10 +447,10 @@
+     ).one_or_none()
+     if not entry:
+         return False
+-    created_at = entry.created_at or order.created_at or _now()
++    created_at = order.created_at or entry.created_at or _now()
+     if created_at.tzinfo is None:
+         created_at = created_at.replace(tzinfo=dt.timezone.utc)
+-    if (_now() - created_at).total_seconds() < 180:
++    if (_now() - created_at).total_seconds() <= 120:
+         return False
+     if entry.status == "waiting":
+         _poll(session, entry)
+--- a/bot/push_service.py
++++ b/bot/push_service.py
+@@ -82,6 +82,10 @@
+ 
+ 
+ def send(session, driver_id: int, event_key: str, order=None):
++    from . import blacklist_service
++    if order is not None and blacklist_service.blocks(session, driver_id, order.passenger_id):
++        return
++
+     """Send only to active devices paired with this exact driver."""
+     if not driver_id:
+         return 0
+--- a/bot/states_service.py
++++ b/bot/states_service.py
+@@ -67,6 +67,8 @@
+     # driver
+     D_MENU = "driver_menu"
+     D_ON_LINE = "driver_on_line"
++    D_BLACKLIST_ADD = "driver_blacklist_add"
++    D_OFFER_ETA = "driver_offer_eta"
+     D_OFFER = "driver_offer"          # received an offer, deciding
+     D_DECLINE_REASON = "driver_decline_reason"
+     D_ETA = "driver_eta"              # entering custom arrival time (free text)
+--- a/common/driver_app_state.py
++++ b/common/driver_app_state.py
+@@ -11,9 +11,9 @@
+ from common.models import User, Order, State, OutboxMessage, ScheduledJob, DriverQueue, Setting, DriverAppCommand
+ from common import time_utils
+ 
+-COMMANDS = frozenset('''driver_online driver_offline driver_away choose_line set_line leave_line stay_line change_line queue who_online driver_car car_edit car_back driver_gender set_driver_gender driver_settings driver_settings_back accept decline decline_reason decline_back set_eta eta_pick eta_custom eta_add_menu eta_add eta_add_custom arrived seated bought finish driver_cancel_active driver_cancel_back driver_cancel_no_show driver_cancel_customer driver_cancel_car waiting_start waiting_stop parallel_orders parallel_back parallel_take route_parallel_take parallel_route_decline parallel_eta parallel_eta_custom parallel_eta_add parallel_eta_add_custom parallel_decline pending_orders pending_take chat_take chat_depart chat_add booking_take booking_depart booking_driver_cancel bookings_taken skip_rate_passenger rate_passenger skip propose_price'''.split())
++COMMANDS = frozenset('''driver_online driver_offline driver_away choose_line set_line leave_line stay_line change_line queue who_online driver_car car_edit car_back driver_gender set_driver_gender driver_settings driver_settings_back accept offer_eta offer_eta_custom blacklist_rating decline decline_reason decline_back set_eta eta_pick eta_custom eta_add_menu eta_add eta_add_custom arrived seated bought finish driver_cancel_active driver_cancel_back driver_cancel_no_show driver_cancel_customer driver_cancel_car waiting_start waiting_stop parallel_orders parallel_back parallel_take route_parallel_take parallel_route_decline parallel_eta parallel_eta_custom parallel_eta_add parallel_eta_add_custom parallel_decline pending_orders pending_take chat_take chat_depart chat_add booking_take booking_depart booking_driver_cancel bookings_taken skip_rate_passenger rate_passenger skip propose_price'''.split())
+ INPUT_HINTS = {
+- 'driver_eta':'Через сколько минут подъедете?', 'driver_eta_add':'Сколько минут добавить?',
++ 'driver_offer_eta':'Через сколько минут подъедете?', 'driver_eta':'Через сколько минут подъедете?', 'driver_eta_add':'Сколько минут добавить?',
+  'driver_finish_price':'Итоговая стоимость поездки, ₽', 'driver_delivery_price':'Стоимость доставки, ₽',
+  'driver_custom_price':'Предложите стоимость, ₽', 'driver_parallel_eta':'Время подачи параллельной заявки, мин',
+  'driver_parallel_eta_add':'Добавить к подаче, мин', 'driver_rate_passenger_text':'Комментарий к оценке',
+@@ -58,6 +58,10 @@
+         ((Order.parallel_driver_id==driver.id) & (Order.status=='parallel_assigned')) |
+         ((Order.parallel_offer_driver_id==driver.id) & Order.status.in_(('created','searching','chat_search')))
+     ).order_by(Order.id.asc()).all()
++    from bot import blacklist_service
++    orders = [order for order in orders
++              if order.driver_id == driver.id or order.parallel_driver_id == driver.id
++              or not blacklist_service.blocks(session, driver.id, order.passenger_id)]
+     serialized=[]
+     for order in orders:
+         serialized.append({'id':order.id,'number':order.number,'status':order.status,'kind':order.order_type,
+@@ -94,7 +98,7 @@
+             if inline and (not oid or (int(oid) not in ids and payload.get('cmd') not in ('parallel_take','pending_take','chat_take','booking_take','booking_depart','booking_driver_cancel'))): continue
+             if oid and payload.get('cmd') not in ('booking_take','booking_depart','booking_driver_cancel','parallel_take','pending_take','chat_take') and int(oid) not in ids:
+                 # Post-ride rating/skip remains valid only while its pointer is open.
+-                if payload.get('cmd') not in ('rate_passenger','skip_rate_passenger'): continue
++                if payload.get('cmd') not in ('rate_passenger','skip_rate_passenger','blacklist_rating'): continue
+                 rating=session.get(Order,int(oid))
+                 if not rating or rating.driver_id!=driver.id or not rating.driver_rating_prompt_outbox_id: continue
+             key=canonical(payload)
+@@ -104,7 +108,10 @@
+         if key not in seen:seen.add(key);actions.append({'label':label,'payload':payload,'danger':False})
+     offer=next((o for o in orders if o.offered_driver_id==driver.id),None)
+     if offer and current_state!='driver_decline_reason':
+-        add('Принять заявку','accept',order_id=offer.id);add('Отказаться','decline',order_id=offer.id)
++        for minutes in (1, 3, 5, 10, 15, 25):
++            add(f'{minutes} мин', 'offer_eta', order_id=offer.id, minutes=minutes)
++        add('Индивидуальное время', 'offer_eta_custom', order_id=offer.id)
++        add('Отказаться','decline',order_id=offer.id)
+     if not orders and current_state in ('driver_menu','driver_on_line','main_menu','start'):
+         add('Вернуться на линию' if driver.driver_status=='away' else 'На линию','driver_online')
+         add('Выбрать линию','choose_line');add('Очередь','queue')
+@@ -117,7 +124,7 @@
+     permitted=driver.role=='driver' and driver.has_role('driver') and not driver.is_blocked
+     if not permitted:actions=[]
+     deadlines={t['order_id'] for t in timers if t['kind']=='accept' and t['due']}
+-    actions=[a for a in actions if not(a['payload'].get('cmd')=='accept' and a['payload'].get('order_id') in deadlines)]
++    actions=[a for a in actions if not(a['payload'].get('cmd') in ('accept','offer_eta','offer_eta_custom') and a['payload'].get('order_id') in deadlines)]
+     version_data={'state':current_state,'data':state.data if state else '{}',
+       'driver':[driver.role,driver.driver_status,driver.is_on_line,driver.current_line],
+       'orders':serialized,'timers':timers,'actions':actions,
+--- a/common/models.py
++++ b/common/models.py
+@@ -237,6 +237,9 @@
+ 
+ class Order(Base):
+     __tablename__ = "orders"
++
++    eta_offer_source = Column(String(20), nullable=True)
++    eta_offer_expires_at = Column(DateTime(timezone=True), nullable=True)
+ 
+     id = Column(Integer, primary_key=True)
+     # Public number shown to passengers/drivers/admins. It is intentionally
+@@ -780,3 +783,12 @@
+     expires_at = Column(DateTime(timezone=True), nullable=False)
+     finished_at = Column(DateTime(timezone=True))
+     __table_args__ = (UniqueConstraint('driver_id','request_id',name='uq_driver_app_request'),)
++
++
++class DriverBlacklist(Base):
++    __tablename__ = "driver_blacklist"
++    id = Column(Integer, primary_key=True)
++    driver_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
++    passenger_vk_id = Column(BigInteger, nullable=False, index=True)
++    created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
++    __table_args__ = (UniqueConstraint("driver_id", "passenger_vk_id", name="uq_driver_blacklist_pair"),)
+--- /dev/null
++++ b/migrations/versions/0059_driver_blacklist.py
+@@ -0,0 +1,30 @@
++"""Private per-driver passenger blacklist."""
++from alembic import op
++import sqlalchemy as sa
++revision = "0059_driver_blacklist"
++down_revision = "0058_arrival_notice"
++branch_labels = None
++depends_on = None
++
++def upgrade():
++    inspector = sa.inspect(op.get_bind())
++    columns = {column["name"] for column in inspector.get_columns("orders")}
++    if "eta_offer_source" not in columns:
++        op.add_column("orders", sa.Column("eta_offer_source", sa.String(20), nullable=True))
++    if "eta_offer_expires_at" not in columns:
++        op.add_column("orders", sa.Column("eta_offer_expires_at", sa.DateTime(timezone=True), nullable=True))
++    if inspector.has_table("driver_blacklist"):
++        return
++    op.create_table("driver_blacklist",
++        sa.Column("id", sa.Integer(), primary_key=True),
++        sa.Column("driver_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
++        sa.Column("passenger_vk_id", sa.BigInteger(), nullable=False),
++        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
++        sa.UniqueConstraint("driver_id", "passenger_vk_id", name="uq_driver_blacklist_pair"))
++    op.create_index("ix_driver_blacklist_driver_id", "driver_blacklist", ["driver_id"])
++    op.create_index("ix_driver_blacklist_passenger_vk_id", "driver_blacklist", ["passenger_vk_id"])
++
++def downgrade():
++    op.drop_table("driver_blacklist")
++    op.drop_column("orders", "eta_offer_expires_at")
++    op.drop_column("orders", "eta_offer_source")
+--- /dev/null
++++ b/tests/test_v188_eta_blacklist.py
+@@ -0,0 +1,381 @@
++"""V188 offline tests: execute original functions, mock network/ORM boundaries.
++
++Run: python -m unittest discover -s tests -p test_v188_eta_blacklist.py -v
++These checks do not claim real PostgreSQL or VK delivery coverage.
++"""
++import ast
++import datetime as dt
++import json
++import math
++import re
++import unittest
++from types import SimpleNamespace as NS
++from unittest.mock import Mock
++from test_requirements_v173_requested_changes import load, source
++
++NOW = dt.datetime(2026, 11, 24, 15, 0, tzinfo=dt.timezone.utc)
++
++
++def keyboards():
++    scope = {"json": json, "math": math}
++    tree = ast.parse(source('bot/keyboards.py'))
++    nodes = [n for n in tree.body if isinstance(n, (ast.Assign, ast.FunctionDef))]
++    exec(compile(ast.fix_missing_locations(ast.Module(body=[
++        ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0), *nodes
++    ], type_ignores=[])), '<keyboards>', 'exec'), scope)
++    return NS(**scope)
++
++
++def actions(raw):
++    return [(button['action']['label'], json.loads(button['action']['payload']))
++            for row in json.loads(raw)['buttons'] for button in row]
++
++
++class KeyboardTests(unittest.TestCase):
++    def setUp(self):
++        self.kb = keyboards()
++
++    def test_offer_shows_six_eta_options_custom_then_decline(self):
++        raw = self.kb.order_offer_keyboard(7)
++        data = actions(raw)
++        self.assertTrue(json.loads(raw)['inline'])
++        self.assertEqual([p['minutes'] for _, p in data if p['cmd'] == 'offer_eta'], [1, 3, 5, 10, 15, 25])
++        self.assertEqual([p['cmd'] for _, p in data[-2:]], ['offer_eta_custom', 'decline'])
++        self.assertTrue(all(p['order_id'] == 7 for _, p in data))
++        self.assertNotIn('accept', [p['cmd'] for _, p in data])
++        self.assertNotIn('Поехать', raw)
++
++    def test_customer_price_offer_uses_same_eta_choices(self):
++        self.assertEqual(self.kb.order_offer_keyboard(7, True), self.kb.order_offer_keyboard(7, False))
++
++    def test_online_menu_matches_main_info_entry(self):
++        data = actions(self.kb.driver_menu(True))
++        cmds = [p['cmd'] for _, p in data]
++        self.assertIn('driver_info', cmds)
++        self.assertNotIn('earnings', cmds)
++        self.assertNotIn('reviews', cmds)
++        self.assertIn('earnings', [p['cmd'] for _, p in actions(self.kb.driver_info_menu())])
++        self.assertIn('reviews', [p['cmd'] for _, p in actions(self.kb.driver_info_menu())])
++        self.assertIn('blacklist', [p['cmd'] for _, p in actions(self.kb.driver_info_menu())])
++
++    def test_blacklist_main_keyboard_is_persistent(self):
++        raw = self.kb.blacklist_menu()
++        self.assertFalse(json.loads(raw).get('inline', False))
++        self.assertEqual([p['cmd'] for _, p in actions(raw)], ['blacklist_add', 'blacklist_remove_menu', 'driver_info'])
++
++    def test_remove_menu_is_inline_and_each_button_has_its_client(self):
++        raw = self.kb.blacklist_remove_keyboard([(201, 'Клиент'), (202, None)], 2, 3)
++        self.assertTrue(json.loads(raw)['inline'])
++        self.assertEqual([p['vk_id'] for _, p in actions(raw) if p['cmd'] == 'blacklist_remove'], [201, 202])
++        self.assertEqual([p['page'] for _, p in actions(raw) if p['cmd'] == 'blacklist_remove_menu'], [1, 3])
++
++    def test_rating_blacklist_is_under_one_star_and_above_skip(self):
++        data = actions(self.kb.passenger_rating_keyboard(7))
++        self.assertEqual(data[-3][1]['stars'], 1)
++        self.assertEqual(data[-2][1], {'cmd': 'blacklist_rating', 'order_id': 7})
++        self.assertEqual(data[-1][1]['cmd'], 'skip_rate_passenger')
++
++    def test_legacy_departure_keyboard_has_no_depart_button(self):
++        data = actions(self.kb.driver_depart_keyboard(7))
++        self.assertNotIn('chat_depart', [p['cmd'] for _, p in data])
++        self.assertIn('eta_pick', [p['cmd'] for _, p in data])
++
++    def test_all_new_offer_commands_pass_both_offer_locks(self):
++        tree = ast.parse(source('bot/handlers.py'))
++        assignment = next(n for n in tree.body if isinstance(n, ast.Assign) and any(
++            isinstance(t, ast.Name) and t.id == '_DRIVER_OFFER_ALLOWED_CMDS' for t in n.targets))
++        allowed = ast.literal_eval(assignment.value)
++        for _, payload in actions(self.kb.order_offer_keyboard(7)):
++            self.assertIn(payload['cmd'], allowed)
++
++
++class AgeAndDeadlineTests(unittest.TestCase):
++    def setUp(self):
++        self.scope = dict(dt=dt, time_utils=NS(now=lambda: NOW), log=Mock(), ScheduledJob=NS(job_key=0, status=0))
++        self.needs = load('bot/handlers.py', 'claim_needs_actuality', self.scope)
++        self.expired = load('bot/handlers.py', 'offer_deadline_passed', self.scope)
++
++    def test_age_strict_boundary(self):
++        for seconds, expected in [(0, False), (59, False), (60, False), (119, False), (120, False), (121, True), (900, True)]:
++            with self.subTest(seconds=seconds):
++                order = NS(created_at=NOW-dt.timedelta(seconds=seconds), driver_accept_time=NOW)
++                self.assertEqual(self.needs(order), expected)
++
++    def test_age_measured_at_acceptance_not_delayed_passenger_answer(self):
++        order = NS(created_at=NOW-dt.timedelta(minutes=10), driver_accept_time=NOW-dt.timedelta(minutes=9))
++        self.assertFalse(self.needs(order))
++
++    def test_naive_utc_timestamp_uses_same_boundary(self):
++        self.assertTrue(self.needs(NS(created_at=(NOW-dt.timedelta(seconds=121)).replace(tzinfo=None), driver_accept_time=NOW)))
++
++    def test_missing_creation_time_never_prompts(self):
++        self.assertFalse(self.needs(NS()))
++
++    def test_future_timestamp_does_not_prompt(self):
++        self.assertFalse(self.needs(NS(created_at=NOW+dt.timedelta(seconds=10), driver_accept_time=NOW)))
++
++    def test_deadline_strictly_rejects_at_sixty(self):
++        for offset, expected in [(1, False), (0, True), (-1, True)]:
++            with self.subTest(offset=offset):
++                self.assertEqual(self.expired(Mock(), NS(eta_offer_expires_at=NOW+dt.timedelta(seconds=offset))), expected)
++
++    def test_legacy_job_is_used_when_explicit_deadline_absent(self):
++        session = Mock()
++        session.query.return_value.filter.return_value.one_or_none.return_value = NS(run_at=NOW-dt.timedelta(seconds=1))
++        self.assertTrue(self.expired(session, NS(id=7)))
++
++    def test_missing_timer_is_not_infinite_acceptance(self):
++        session = Mock()
++        session.query.return_value.filter.return_value.one_or_none.return_value = None
++        self.assertTrue(self.expired(session, NS(id=7)))
++
++    def test_local_timezone_is_same_instant(self):
++        local = dt.timezone(dt.timedelta(hours=5))
++        order = NS(created_at=(NOW-dt.timedelta(seconds=121)).astimezone(local), driver_accept_time=NOW)
++        self.assertTrue(self.needs(order))
++
++
++class OfferInputTests(unittest.TestCase):
++    def setUp(self):
++        self.user = NS(id=1, vk_id=101)
++        self.order = NS(id=7, customer_price=None)
++        self.scope = dict(re=re, vk=Mock(), _live_eta_offer=Mock(return_value=self.order),
++                          driver_accept=Mock(), set_state=Mock(), States=NS(D_OFFER_ETA='offer_eta'))
++        self.accept = load('bot/handlers.py', 'accept_offer_eta', self.scope)
++        self.custom = load('bot/handlers.py', 'offer_eta_custom', self.scope)
++
++    def test_valid_eta_accepts_once_with_eta_and_no_early_passenger_notice(self):
++        self.accept(None, self.user, 7, 10)
++        self.scope['driver_accept'].assert_called_once_with(None, self.user, 7, notify_passenger=False, selected_eta=10)
++
++    def test_custom_minute_text_is_accepted(self):
++        self.accept(None, self.user, 7, '12 мин.')
++        self.assertEqual(self.scope['driver_accept'].call_args.kwargs['selected_eta'], 12)
++
++    def test_invalid_values_never_accept(self):
++        for value in (None, '', 'abc', 0, -1, '1.5', '1 5', '10abc', 1441, 10000):
++            with self.subTest(value=value):
++                self.scope['driver_accept'].reset_mock()
++                self.accept(None, self.user, 7, value)
++                self.scope['driver_accept'].assert_not_called()
++
++    def test_deadline_rejection_precedes_acceptance(self):
++        self.scope['_live_eta_offer'].return_value = None
++        self.accept(None, self.user, 7, 5)
++        self.scope['driver_accept'].assert_not_called()
++
++    def test_custom_button_only_sets_input_state_no_accept_or_timer_reset(self):
++        self.custom(None, self.user, 7)
++        self.scope['driver_accept'].assert_not_called()
++        self.scope['set_state'].assert_called_once_with(None, 101, 'offer_eta', {'order_id': 7}, merge=False)
++
++    def test_custom_input_is_processed_before_offer_lock(self):
++        tree = ast.parse(source('bot/handlers.py'))
++        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'handle_driver')
++        text = ast.get_source_segment(source('bot/handlers.py'), node)
++        self.assertLess(text.index('if state == States.D_OFFER_ETA and not cmd:'), text.index('if pending_offer and cmd not in'))
++
++    def test_stale_order_foreign_driver_and_expired_offer_are_rejected(self):
++        session = Mock()
++        order = NS(id=7, status='searching', offered_driver_id=1, driver_id=None, parallel_driver_id=None, passenger_id=2)
++        query = session.query.return_value.filter.return_value.with_for_update.return_value
++        query.one_or_none.return_value = order
++        scope = dict(Order=NS(id=0), offer_deadline_passed=Mock(return_value=False),
++                     blacklist_service=NS(blocks=Mock(return_value=False)))
++        live = load('bot/handlers.py', '_live_eta_offer', scope)
++        self.assertIs(live(session, self.user, 7), order)
++        for attr, value in [('status','assigned'), ('offered_driver_id',2), ('driver_id',2), ('parallel_driver_id',2)]:
++            original = getattr(order, attr);setattr(order,attr,value)
++            self.assertIsNone(live(session,self.user,7));setattr(order,attr,original)
++        scope['offer_deadline_passed'].return_value=True
++        self.assertIsNone(live(session,self.user,7))
++        scope['offer_deadline_passed'].return_value=False
++        scope['blacklist_service'].blocks.return_value=True
++        self.assertIsNone(live(session,self.user,7))
++
++
++class BlacklistTests(unittest.TestCase):
++    def setUp(self):
++        self.user = NS(id=1, vk_id=101)
++        self.scope = dict(vk=Mock(), re=re, kb=NS(blacklist_menu=Mock(return_value='menu')),
++                          blacklist_service=NS(add=Mock()), show_blacklist=Mock())
++        self.callback = load('bot/handlers.py', 'add_blacklist_link', self.scope)
++
++    def test_vk_ru_link_is_resolved_and_added_privately(self):
++        self.scope['vk'].resolve_user_id.return_value = 201
++        self.callback(None, self.user, 'https://vk.ru/client_name')
++        self.scope['blacklist_service'].add.assert_called_once_with(None, self.user, 201)
++        self.assertTrue(all(c.args[0] == 101 for c in self.scope['vk'].send_message.call_args_list))
++
++    def test_vk_com_mobile_and_numeric_links_are_supported(self):
++        for link in ('https://vk.com/id201', 'vk.ru/id201', 'https://m.vk.ru/client_name', 'https://www.vk.ru/id201/'):
++            with self.subTest(link=link):
++                self.scope['vk'].resolve_user_id.return_value=201
++                self.scope['blacklist_service'].add.reset_mock()
++                self.callback(None,self.user,link)
++                self.scope['blacklist_service'].add.assert_called_once()
++
++    def test_foreign_hosts_groups_self_and_failed_resolve_are_not_added(self):
++        for link, vk_id in [('https://evil.test/id201',201),('https://vk.ru.evil.test/id201',201),('https://vk.ru/club123',None),
++                            ('https://vk.ru/id101',101),('https://vk.ru/deleted',0),('https://vk.ru/club123',-123)]:
++            with self.subTest(link=link,vk_id=vk_id):
++                self.scope['vk'].resolve_user_id.return_value=vk_id
++                self.scope['blacklist_service'].add.reset_mock()
++                self.callback(None,self.user,link)
++                self.scope['blacklist_service'].add.assert_not_called()
++
++    def test_removal_is_scoped_to_owner(self):
++        session=Mock();scope=dict(DriverBlacklist=object,vk=Mock(),kb=Mock(),show_blacklist_remove=Mock())
++        callback=load('bot/handlers.py','remove_blacklist',scope)
++        callback(session,self.user,201)
++        session.query.return_value.filter_by.assert_called_once_with(driver_id=1,passenger_vk_id=201)
++        session.query.return_value.filter_by.return_value.delete.assert_called_once()
++
++    def test_add_is_idempotent_and_flushes_new_row(self):
++        session=Mock();existing=NS(id=9)
++        session.query.return_value.filter_by.return_value.one_or_none.return_value=existing
++        scope=dict(User=NS(id=0),DriverBlacklist=Mock())
++        callback=load('bot/blacklist_service.py','add',scope)
++        self.assertIs(callback(session,self.user,201),existing)
++        session.add.assert_not_called()
++        session.query.return_value.filter_by.return_value.one_or_none.return_value=None
++        callback(session,self.user,201)
++        session.add.assert_called_once();session.flush.assert_called_once()
++
++    def test_rating_adds_without_review_and_keeps_driver_state(self):
++        session=Mock();passenger=NS(vk_id=201)
++        order=NS(id=7,driver_id=1,passenger_id=2,status='completed',dispatcher_id=None,driver_rating_prompt_outbox_id=8)
++        session.query.return_value.filter.return_value.with_for_update.return_value.one_or_none.return_value=order
++        session.get.return_value=passenger
++        scope=dict(Order=NS(id=0),User=object,blacklist_service=NS(add=Mock()),_finish_rating_prompt=Mock(),vk=Mock())
++        load('bot/handlers.py','blacklist_from_rating',scope)(session,self.user,7)
++        scope['blacklist_service'].add.assert_called_once_with(session,self.user,201)
++        scope['_finish_rating_prompt'].assert_called_once()
++        session.add.assert_not_called()
++        self.assertTrue(all(c.args[0]==101 for c in scope['vk'].send_message.call_args_list))
++
++    def test_expired_or_foreign_rating_button_does_nothing(self):
++        session=Mock();scope=dict(Order=NS(id=0),User=object,blacklist_service=NS(add=Mock()),_finish_rating_prompt=Mock(),vk=Mock())
++        callback=load('bot/handlers.py','blacklist_from_rating',scope)
++        for order in (None,NS(driver_id=2),NS(driver_id=1,status='assigned'),
++                      NS(driver_id=1,status='completed',driver_rating_prompt_outbox_id=None)):
++            session.query.return_value.filter.return_value.with_for_update.return_value.one_or_none.return_value=order
++            callback(session,self.user,7)
++        scope['blacklist_service'].add.assert_not_called()
++
++    def test_remove_list_is_paginated_below_vk_ten_button_limit(self):
++        scope=dict(close_blacklist_remove=Mock(),_blacklist_clients=lambda *a:[(i,f'Client {i}') for i in range(30)],
++                   show_blacklist=Mock(),vk=Mock(),kb=keyboards(),set_state=Mock(),States=NS(D_MENU='menu'))
++        callback=load('bot/handlers.py','show_blacklist_remove',scope)
++        callback(None,self.user,2)
++        raw=scope['vk'].send_tracked_message.call_args.kwargs['keyboard']
++        self.assertLessEqual(len(actions(raw)),10)
++        self.assertEqual(len([p for _,p in actions(raw) if p['cmd']=='blacklist_remove']),7)
++
++
++class DispatchRegressionTests(unittest.TestCase):
++    def test_source_has_guards_in_all_claim_paths(self):
++        for path,name in [('bot/handlers.py','driver_accept'),('bot/handlers.py','select_direct_driver'),
++                          ('bot/handlers.py','driver_take_from_chat'),('bot/handlers.py','reserve_eta_offer'),
++                          ('bot/parallel_orders.py','take'),('bot/parallel_orders.py','_auto_offer_trip_is_eligible'),
++                          ('bot/booking_service.py','take_booking'),('bot/customer_price_service.py','reserve_from_chat'),
++                          ('bot/admin_order_assign_service.py','assign_from_admin')]:
++            with self.subTest(path=path,name=name):
++                tree=ast.parse(source(path));node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name)
++                self.assertIn('blacklist_service.blocks',ast.get_source_segment(source(path),node))
++
++    def test_fifo_excludes_blacklisted_front_without_reordering_queue(self):
++        text=source('bot/order_service.py');tree=ast.parse(text)
++        node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='offer_to_next_driver')
++        function=ast.get_source_segment(text,node)
++        self.assertIn('blacklist_service.excluded_driver_ids',function)
++        self.assertIn('exclude_driver_ids=sorted(excluded)',function)
++        self.assertNotIn('move_to_tail',function)
++
++    def test_next_driver_timeout_keeps_same_queue_handoff(self):
++        text=source('bot/order_service.py');tree=ast.parse(text)
++        node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_accept_timeout')
++        function=ast.get_source_segment(text,node)
++        self.assertIn('driver.is_on_line = False',function)
++        self.assertIn('driver.driver_status = "offline"',function)
++        self.assertIn('offer_to_next_driver(session, order, {driver_id})',function)
++        self.assertNotIn('publish_direct_to_requests_chat(session, order)',function)
++
++    def test_ordinary_and_direct_offers_always_schedule_sixty_seconds(self):
++        for name in ('offer_to_next_driver','offer_to_selected_driver'):
++            tree=ast.parse(source('bot/order_service.py'))
++            node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name)
++            assignments=[n for n in ast.walk(node) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='timeout' for t in n.targets)]
++            self.assertEqual(len(assignments),1)
++            self.assertEqual(ast.literal_eval(assignments[0].value),60)
++
++    def test_pending_and_chat_taps_reserve_without_early_assignment(self):
++        for name in ('driver_take_pending','driver_take_from_chat'):
++            tree=ast.parse(source('bot/handlers.py'));node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name)
++            function=ast.get_source_segment(source('bot/handlers.py'),node)
++            self.assertIn('reserve_eta_offer',function)
++            self.assertNotIn('order.driver_id = user.id',function)
++
++    def test_new_migration_is_single_head_and_preserves_existing_tables(self):
++        import pathlib
++        root=pathlib.Path(__file__).resolve().parents[1]
++        revisions={}
++        for p in (root/'migrations/versions').glob('*.py'):
++            scope={}
++            for node in ast.parse(p.read_text()).body:
++                if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('revision','down_revision') for t in node.targets):
++                    for t in node.targets:
++                        if isinstance(t,ast.Name):scope[t.id]=ast.literal_eval(node.value)
++            if scope.get('revision'):revisions[scope['revision']]=scope['down_revision']
++        heads=set(revisions)-set(revisions.values())
++        self.assertEqual(heads,{'0059_driver_blacklist'})
++        text=source('migrations/versions/0059_driver_blacklist.py')
++        upgrade=text.split('def upgrade():',1)[1].split('def downgrade():',1)[0]
++        self.assertNotIn('drop_',upgrade)
++        self.assertIn('has_table("driver_blacklist")',upgrade)
++
++
++class AcceptanceRuntimeTests(unittest.TestCase):
++    def run_accept(self, age=60, old_prompt=False):
++        order=NS(id=7,number=7,status='searching',passenger_id=2,driver_id=None,
++                 offered_driver_id=1,dispatcher_id=None,customer_price=None,chat_notice_outbox_id=None,
++                 eta_offer_source='fifo',created_at=NOW-dt.timedelta(seconds=age),
++                 driver_accept_time=None,arrival_eta=None)
++        driver=NS(id=1,vk_id=101,is_on_line=True,current_line='Горнозаводск',driver_missed_offers=0)
++        session=Mock();session.query.return_value.filter.return_value.with_for_update.return_value.one_or_none.return_value=order
++        scope=dict(Order=NS(id=0),order_service=Mock(),parallel_orders=NS(local_line_allows=lambda *a:True),
++                   blacklist_service=NS(blocks=lambda *a:False),offer_deadline_passed=lambda *a:False,
++                   driver_block_service=NS(is_blocked=lambda u:False),lines=NS(has_complete_car=lambda u:True),
++                   timers=Mock(),time_utils=NS(now=lambda:NOW),queue_service=Mock(),audit=Mock(),
++                   request_claim_actuality=Mock(return_value=old_prompt),delivery_service=NS(is_delivery=lambda o:False),
++                   _apply_eta=Mock(),vk=Mock())
++        scope['order_service']._current_offer.return_value=1
++        scope['claim_needs_actuality']=load('bot/handlers.py','claim_needs_actuality',dict(dt=dt,time_utils=scope['time_utils']))
++        load('bot/handlers.py','driver_accept',scope)(session,driver,7,notify_passenger=False,selected_eta=10)
++        return order,scope
++
++    def test_eta_is_applied_in_the_same_acceptance_transaction(self):
++        order,scope=self.run_accept()
++        self.assertEqual(order.driver_id,1)
++        self.assertEqual(order.status,'assigned')
++        self.assertIsNone(order.offered_driver_id)
++        self.assertEqual(order.driver_accept_time,NOW)
++        self.assertEqual(order.arrival_eta,10)
++        scope['_apply_eta'].assert_called_once()
++        scope['timers'].cancel.assert_any_call('accept',7)
++
++    def test_old_request_keeps_chosen_eta_while_waiting_for_passenger(self):
++        order,scope=self.run_accept(age=121,old_prompt=True)
++        self.assertEqual(order.arrival_eta,10)
++        scope['_apply_eta'].assert_not_called()
++        scope['request_claim_actuality'].assert_called_once()
++        scope['order_service'].finalize_offer_message.assert_called_once_with(
++            unittest.mock.ANY,order,'⏰ Вы выбрали 10 мин.')
++
++    def test_acceptance_does_not_send_extra_found_driver_notice(self):
++        _,scope=self.run_accept()
++        scope['order_service'].notify_driver_found.assert_not_called()
++
++
++if __name__ == '__main__':
++    unittest.main()

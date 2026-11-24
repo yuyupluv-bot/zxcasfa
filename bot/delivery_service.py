@@ -248,6 +248,10 @@ def _confirm(session: Session, order: Order, passenger: User | None, driver: Use
     order.driver_accept_time = _now()  # start the 2-min cancel window now
     price = float(order.price or 0)
     if driver:
+        # Retire a legacy/orphaned initial offer before replacing its pointer.
+        # Arrival ETA and delivery-completion duration remain separate steps.
+        if order.offer_outbox_id:
+            order_service.finalize_offer_message(session, order, "✅ Доставка принята.")
         # Track this inline ETA prompt; _apply_eta removes the buttons after
         # the driver chooses a delivery time.
         order.offer_outbox_id = vk.send_tracked_message(
