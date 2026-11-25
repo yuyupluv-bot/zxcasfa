@@ -20,7 +20,7 @@
   </article>
   <article class="metric violet">
     <i class="bi bi-speedometer2"></i>
-    <div><span>В среднем</span><strong>{{ '%.1f'|format(stats.total / stats.drivers) if stats.drivers else '0' }}</strong><small>заявки на водителя</small></div>
+    <div><span>В среднем</span><strong>{{ '%.1f'|format(stats.average_orders_per_driver) }}</strong><small>заявки на водителя · работают 4+ дня</small></div>
   </article>
 </section>
 

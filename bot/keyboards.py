@@ -409,9 +409,14 @@ def chat_order_actual_keyboard(order_id: int) -> str:
 
 
 def parallel_actuality_keyboard(order_id: int) -> str:
+    """Separate confirmation before a stale parallel claim proceeds."""
     return keyboard([
-        [_btn("✅ Да, жду", GREEN, {"cmd": "chat_order_actual_yes", "order_id": order_id})],
-        [_btn("❌ Нет, отменяю заявку", RED, {"cmd": "chat_order_actual_no", "order_id": order_id})],
+        [_btn("✅ Да, заявка актуальна", GREEN, {
+            "cmd": "parallel_claim_actuality_yes", "order_id": order_id,
+        })],
+        [_btn("❌ Нет, отменяю заявку", RED, {
+            "cmd": "parallel_claim_actuality_no", "order_id": order_id,
+        })],
     ], inline=True)
 
 
@@ -521,11 +526,11 @@ def rating_keyboard(order_id: int) -> str:
 
 
 def passenger_rating_keyboard(order_id: int) -> str:
-    """Keep blacklist on a separate row BELOW one star (VK inline: six rows)."""
+    """Keep the compact rating layout and blacklist/skip rows below it."""
     def star(value):
         return _btn("⭐" * value, WHITE,
                     {"cmd": "rate_passenger", "order_id": order_id, "stars": value})
-    rows = [[star(5), star(4)], [star(3)], [star(2)], [star(1)]]
+    rows = [[star(5)], [star(4), star(3)], [star(2), star(1)]]
     rows.append([_btn("🚫 Чёрный список", RED, {"cmd": "blacklist_rating", "order_id": order_id})])
     rows.append([_btn("Пропустить", WHITE, {"cmd": "skip_rate_passenger", "order_id": order_id})])
     return keyboard(rows, inline=True)

@@ -1686,6 +1686,10 @@ def handle_passenger(session, user, state, text, payload, attachments):
         return passenger_chat_order_actual(session, user, payload.get("order_id"), True)
     if cmd == "chat_order_actual_no":
         return passenger_chat_order_actual(session, user, payload.get("order_id"), False)
+    if cmd == "parallel_claim_actuality_yes":
+        return passenger_chat_order_actual(session, user, payload.get("order_id"), True)
+    if cmd == "parallel_claim_actuality_no":
+        return passenger_chat_order_actual(session, user, payload.get("order_id"), False)
     if cmd == "chat_add":
         return enter_chat(session, user, driver=False)
     if cmd == "chat_stop":
@@ -2641,6 +2645,7 @@ def passenger_cancel(session: Session, user: User, order_id=None) -> None:
     parallel_charge = bool(
         not _is_dispatcher_order(order) and _parallel_cancellation_is_chargeable(order)
     )
+    order_service.clear_offer_notice(session, order)
     if getattr(order, "enroute_notice_outbox_id", None):
         order_service.clear_enroute_notice(session, order)
     from . import outbox_service
@@ -2650,6 +2655,9 @@ def passenger_cancel(session: Session, user: User, order_id=None) -> None:
             outbox_service.cancel_or_delete(session, prompt_id)
             setattr(order, prompt_field, None)
     chat_reason = order_service.driver_chat_reason_label(session, order) if order.status == "chat_search" else None
+    chat_card_finalized = order_service.finalize_cancelled_chat_notice(
+        session, order, "клиентом"
+    )
     order.status = "cancelled"
     order.cancelled_at = time_utils.now()
     # Cancellations themselves are not limited. Abuse is bounded by the five
@@ -2674,7 +2682,7 @@ def passenger_cancel(session: Session, user: User, order_id=None) -> None:
             from . import push_service
             push_service.send(session, offered_driver.id, "cancelled", order)
         order.offered_driver_id = None
-    if chat_reason:
+    if chat_reason and not chat_card_finalized:
         order_service.send_fallback_chat_notice(
             session,
             f"❌ Заявка №{order.number} ({chat_reason}) отменена пассажиром.",
@@ -3826,9 +3834,24 @@ def driver_set_gender(session: Session, user: User, gender: str | None) -> None:
     return show_main_menu(session, user)
 
 
-def driver_show_settings(session: Session, user: User) -> None:
+def driver_show_settings(
+    session: Session,
+    user: User,
+    confirmation: str | None = None,
+) -> None:
     status = "включён" if user.show_payment_details else "выключен"
-    vk.send_message(user.vk_id, f"⚙ Настройки водителя. Показ реквизитов: {status}.", keyboard=kb.driver_settings_keyboard(bool(user.show_payment_details), user.driver_gender, bool(getattr(user, "shortage_notice_enabled", False))))
+    text = f"⚙ Настройки водителя. Показ реквизитов: {status}."
+    if confirmation:
+        text += f"\n\n{confirmation}"
+    vk.send_message(
+        user.vk_id,
+        text,
+        keyboard=kb.driver_settings_keyboard(
+            bool(user.show_payment_details),
+            user.driver_gender,
+            bool(getattr(user, "shortage_notice_enabled", False)),
+        ),
+    )
     set_state(session, user.vk_id, States.D_SETTINGS)
 
 
@@ -3842,7 +3865,12 @@ def driver_shortage_notice_toggle(session: Session, user: User) -> None:
         from . import outbox_service
         outbox_service.cancel_or_delete(session, user.shortage_notice_outbox_id)
         user.shortage_notice_outbox_id = None
-    driver_show_settings(session, user)
+    confirmation = (
+        "✅ Уведомления при нехватке водителей включены."
+        if user.shortage_notice_enabled
+        else "❌ Уведомления при нехватке водителей выключены."
+    )
+    driver_show_settings(session, user, confirmation=confirmation)
 
 
 def driver_payment_start(session: Session, user: User) -> None:
@@ -5260,6 +5288,9 @@ def _apply_eta(session: Session, user: User, order: Order, eta: int) -> None:
     is_delivery = delivery_service.is_delivery(order)
     is_partner_delivery = delivery_service.is_partner_delivery(order)
     target = session.get(User, order.dispatcher_id) if _is_dispatcher_order(order) else session.get(User, order.passenger_id)
+    # Remove the temporary «Минутку…»/«Чуть подождать…» card before sending
+    # the card that names the driver and contains the ETA.
+    order_service.clear_offer_notice(session, order)
     car_label = order_service.multi_car_label(session, order)
     car_prefix = f"🚕 {car_label}\n" if car_label else ""
     if target:
@@ -5297,9 +5328,7 @@ def _apply_eta(session: Session, user: User, order: Order, eta: int) -> None:
                 _driver_card(user) if is_partner_delivery
                 else order_service.departure_driver_card_text(assigned_driver)
             )
-            if not claim_needs_actuality(order):
-                order.actuality_confirmed = True
-            if order.actuality_confirmed:
+            if is_partner_delivery:
                 order.departure_prompt_outbox_id = None
                 vk.send_message(
                     target.vk_id,
@@ -8204,7 +8233,7 @@ def passenger_chat_order_actual(session: Session, user: User, order_id, actual: 
             order.actuality_confirmed = True
             vk.send_message(
                 driver.vk_id,
-                "Клиент по параллельной заявке, ожидает на месте",
+                "✅ Клиент подтвердил актуальность параллельной заявки.",
             )
             set_state(session, user.vk_id, States.P_IN_RIDE, {"order_id": order.id}, merge=False)
             if order.status == "parallel_assigned":

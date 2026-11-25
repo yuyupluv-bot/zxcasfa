@@ -1084,7 +1084,14 @@ def prompt_eta_after_actuality(session: Session, driver: User, order: Order) -> 
     if order.status != "parallel_assigned" or order.parallel_driver_id != driver.id:
         return vk.send_message(driver.vk_id, "Параллельная заявка уже недоступна.")
     if order.parallel_eta:
-        return save_eta(session, driver, order.id, order.parallel_eta, notify_passenger=False, allow_existing=True)
+        return save_eta(
+            session,
+            driver,
+            order.id,
+            order.parallel_eta,
+            notify_passenger=True,
+            allow_existing=True,
+        )
     # Compatibility only for a reservation accepted by a pre-V189 process.
     timers.schedule("parallel_eta", order.id, 120, lambda: _eta_timeout(order.id))
     passenger = session.get(User, order.passenger_id)
@@ -1138,10 +1145,15 @@ def save_eta(session: Session, driver: User, order_id: int, minutes: int, *, not
         return vk.send_message(driver.vk_id, "Параллельная заявка недоступна.")
     # A repeated ETA callback must not create a second passenger card. The
     # initial acceptance and the old-request continuation explicitly opt in.
-    if order.parallel_eta and not allow_existing:
+    if getattr(order, "parallel_eta", None) and not allow_existing:
         return
     timers.cancel("parallel_eta", order.id)
     from . import order_service
+    # Retire the temporary «Минутку…» notice before publishing the driver's
+    # name and ETA to the passenger.
+    clear_notice = getattr(order_service, "clear_offer_notice", None)
+    if clear_notice is not None:
+        clear_notice(session, order)
     passenger = session.get(User, order.passenger_id)
     route = order.route_text or f"{order.address_from} — {order.address_to}"
     passenger_label = (

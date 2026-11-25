@@ -34,6 +34,7 @@ _ORDER_ACTION_COMMANDS = {
     "chat_take", "chat_no_driver", "parallel_take",
     "parallel_route_decline", "queue_yes", "queue_no",
     "chat_order_actual_yes", "chat_order_actual_no",
+    "parallel_claim_actuality_yes", "parallel_claim_actuality_no",
     "departure_wait", "departure_cancel",
 }
 
@@ -127,6 +128,11 @@ def cancel_from_admin(session: Session, order: Order, reason: str = "") -> dict:
     order.cancelled_at = time_utils.now()
     order.cancelled_by = "admin"
 
+    # Keep the original request visible in the driver chat, but remove its
+    # action buttons and make the cancellation actor explicit.
+    from . import order_service
+    order_service.finalize_cancelled_chat_notice(session, order, "администратором")
+
     # Stop persistent work. In-memory callbacks in the bot are also harmless
     # because they re-read the now-cancelled status before dispatching.
     session.query(ScheduledJob).filter(ScheduledJob.object_id == order.id).delete(
@@ -200,6 +206,7 @@ def cancel_from_admin(session: Session, order: Order, reason: str = "") -> dict:
         for name in (
             "offer_outbox_id", "departure_prompt_outbox_id", "enroute_notice_outbox_id",
             "chat_notice_outbox_id", "chat_actuality_prompt_outbox_id",
+            "search_notice_outbox_id",
             "passenger_rating_prompt_outbox_id", "driver_rating_prompt_outbox_id",
             "parallel_offer_outbox_id",
         )
@@ -231,6 +238,7 @@ def cancel_from_admin(session: Session, order: Order, reason: str = "") -> dict:
 
     for name in (
         "offer_outbox_id", "departure_prompt_outbox_id", "enroute_notice_outbox_id", "chat_notice_outbox_id",
+        "search_notice_outbox_id",
         "chat_actuality_prompt_outbox_id", "passenger_rating_prompt_outbox_id",
         "driver_rating_prompt_outbox_id",
     ):

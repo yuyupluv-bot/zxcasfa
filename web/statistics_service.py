@@ -183,6 +183,8 @@ def build_driver_week_stats(orders, now, tz):
         row["counts"][index[moment.date()]] += 1
         row["total"] += 1
         row["revenue"] += _money(getattr(order, "price", 0))
+    for row in rows.values():
+        row["active_days"] = sum(1 for count in row["counts"] if count > 0)
     result = sorted(
         rows.values(),
         key=lambda item: (-item["total"], -item["counts"][-1], item["name"].lower()),
@@ -190,6 +192,8 @@ def build_driver_week_stats(orders, now, tz):
     for position, row in enumerate(result, start=1):
         row["place"] = position
     totals = [sum(row["counts"][i] for row in result) for i in range(7)]
+    eligible = [row for row in result if row["active_days"] >= 4]
+    eligible_total = sum(row["total"] for row in eligible)
     return {
         "days": [
             {
@@ -204,6 +208,11 @@ def build_driver_week_stats(orders, now, tz):
         "total": sum(totals),
         "revenue": sum(row["revenue"] for row in result),
         "drivers": len(result),
+        "average_drivers": len(eligible),
+        "average_total": eligible_total,
+        "average_orders_per_driver": (
+            eligible_total / len(eligible) if eligible else 0
+        ),
     }
 
 

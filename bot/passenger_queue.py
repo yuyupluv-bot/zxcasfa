@@ -138,6 +138,18 @@ def dispatch_new_order(session: Session, order: Order) -> None:
     If a free driver exists, offer immediately; otherwise park the order and
     tell the passenger that everyone is busy.
     """
+    def send_waiting_notice(text: str) -> None:
+        """Send a tracked notice in production, plain VK in legacy harnesses."""
+        sender = getattr(order_service, "send_search_notice", None)
+        keyboard = kb.passenger_waiting_keyboard(order.id)
+        if sender is not None:
+            sender(session, order, text, keyboard=keyboard)
+            return
+        passenger = session.get(User, order.passenger_id)
+        if passenger:
+            vk.send_message(passenger.vk_id, text, keyboard=keyboard)
+
+    blacklist = globals().get("blacklist_service")
     # Village-route priority is strict: the exact Пашия/Кусья FIFO line first,
     # then one matching busy driver travelling from Gornozavodsk, and only then
     # the Gornozavodsk FIFO fallback. This applies to explicit «из Пашии/Кусьи»
@@ -149,15 +161,13 @@ def dispatch_new_order(session: Session, order: Order) -> None:
     if route_city:
         if queue_service.has_waiting_driver(
             session, route_city, line_scope="exact",
-                exclude_driver_ids=sorted(blacklist_service.excluded_driver_ids(session, order.passenger_id))
+                exclude_driver_ids=sorted(
+                    blacklist.excluded_driver_ids(session, order.passenger_id)
+                ) if blacklist is not None else []
         ):
             passenger = session.get(User, order.passenger_id)
             if passenger and not order.dispatcher_id:
-                vk.send_message(
-                    passenger.vk_id,
-                    "⏰ Минутку…",
-                    keyboard=kb.passenger_waiting_keyboard(order.id),
-                )
+                send_waiting_notice("⏰ Минутку…")
             order_service.offer_to_next_driver(
                 session, order, line_scope="exact", line_name=route_city
             )
@@ -166,11 +176,7 @@ def dispatch_new_order(session: Session, order: Order) -> None:
         passenger = session.get(User, order.passenger_id)
         if parallel_orders.notify_busy_drivers(session, order):
             if passenger and not order.dispatcher_id:
-                vk.send_message(
-                    passenger.vk_id,
-                    "⏰ Чуть подождать, первый свободный, возьмет вашу заявку…",
-                    keyboard=kb.passenger_waiting_keyboard(order.id),
-                )
+                send_waiting_notice("⏰ Чуть подождать, первый свободный, возьмет вашу заявку…")
             return
         # No suitable route driver (including a trip-scoped timeout
         # suppression): do not start another one-minute wait. Continue with
@@ -181,22 +187,16 @@ def dispatch_new_order(session: Session, order: Order) -> None:
         # A Gornozavodsk fallback can offer immediately. Do not say that all
         # drivers are busy just because the village line itself was empty.
         if passenger and not order.dispatcher_id and order.status not in ("chat_search", "cancelled", "completed"):
-            vk.send_message(
-                passenger.vk_id,
+            send_waiting_notice(
                 "⏰ Минутку…" if order.offered_driver_id or order.driver_id else
-                "⏰ Чуть подождать, первый свободный, возьмет вашу заявку…",
-                keyboard=kb.passenger_waiting_keyboard(order.id),
+                "⏰ Чуть подождать, первый свободный, возьмет вашу заявку…"
             )
         return
 
     if order_service.has_eligible_waiting_driver(session, order):
         passenger = session.get(User, order.passenger_id)
         if passenger and not order.dispatcher_id:
-            vk.send_message(
-                passenger.vk_id,
-                "⏰ Минутку…",
-                keyboard=kb.passenger_waiting_keyboard(order.id),
-            )
+            send_waiting_notice("⏰ Минутку…")
         order_service.offer_to_next_driver(session, order)
         return
 
@@ -361,8 +361,9 @@ def try_promote(session: Session) -> None:
             if offered and not order.dispatcher_id:
                 passenger = session.get(User, order.passenger_id)
                 if passenger:
-                    order.search_notice_outbox_id = vk.send_tracked_message(
-                        passenger.vk_id,
+                    order_service.send_search_notice(
+                        session,
+                        order,
                         "🚕 Нашёлся свободный водитель. Передаём ему вашу заявку.",
                         keyboard=kb.passenger_waiting_keyboard(order.id),
                     )

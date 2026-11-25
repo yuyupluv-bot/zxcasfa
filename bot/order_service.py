@@ -323,12 +323,43 @@ def notify_driver_found(session: Session, order: Order) -> None:
             order.offer_notice_outbox_id = None
 
 
+def send_search_notice(
+    session: Session,
+    order: Order,
+    text: str,
+    *,
+    keyboard: str | None = None,
+) -> int | None:
+    """Track the passenger's temporary search/waiting message.
+
+    Older versions sent «Минутку…» with a plain VK call, which made it
+    impossible to remove when a driver later supplied ETA.  Reusing the
+    existing ``search_notice_outbox_id`` keeps this change migration-free.
+    """
+    old_id = getattr(order, "search_notice_outbox_id", None)
+    if old_id:
+        from . import outbox_service
+        outbox_service.cancel_or_delete(session, old_id)
+        order.search_notice_outbox_id = None
+    passenger = getattr(order, "passenger", None)
+    if passenger is None:
+        passenger = session.get(User, order.passenger_id) if order.passenger_id else None
+    if not passenger:
+        return None
+    order.search_notice_outbox_id = vk.send_tracked_message(
+        passenger.vk_id,
+        text,
+        keyboard=keyboard,
+    )
+    return order.search_notice_outbox_id
+
+
 def clear_offer_notice(session: Session, order: Order) -> None:
     """Delete passenger notices that belong to the previous driver offer.
 
-    Both «Нашёлся свободный водитель» and «Водитель указывает время…»
-    describe one specific driver. When the request is re-offered they
-    must disappear instead of stacking up in the passenger's chat.
+    Search/waiting notices and «Нашёлся свободный водитель» describe one
+    temporary dispatch stage. They must disappear instead of stacking up in
+    the passenger's chat.
     """
     from . import outbox_service
     for field in ("search_notice_outbox_id", "offer_notice_outbox_id"):
@@ -356,6 +387,36 @@ def finalize_offer_message(session: Session, order: Order, result_text: str) -> 
     )
     if finalized:
         order.offer_outbox_id = None
+    return finalized
+
+
+def finalize_cancelled_chat_notice(
+    session: Session,
+    order: Order,
+    actor: str,
+) -> bool:
+    """Edit a shared driver-chat card into a buttonless cancellation notice."""
+    outbox_id = getattr(order, "chat_notice_outbox_id", None)
+    if not outbox_id:
+        return False
+    from . import outbox_service
+    row = session.get(OutboxMessage, outbox_id)
+    if not row:
+        return False
+    text = (row.text or f"🔔 Заявка №{order.number}").rstrip()
+    marker = f"❌ Отменен {actor}."
+    if marker not in text:
+        text = f"{text}\n\n{marker}"
+    finalized = outbox_service.finalize_tracked_message(
+        session,
+        outbox_id,
+        text,
+        replace_text=True,
+        defer_edit=True,
+        replacement_keyboard='{"buttons":[],"inline":true}',
+    )
+    if finalized:
+        order.chat_notice_outbox_id = None
     return finalized
 
 
@@ -1104,6 +1165,17 @@ def _handle_no_driver(session: Session, order: Order) -> None:
     """No free driver could take the order: either report a specific reason
     (delivery / long-distance) or park the passenger in the waiting queue.
     """
+    send_search = globals().get("send_search_notice")
+
+    def send_waiting_notice(text: str) -> None:
+        keyboard = kb.passenger_waiting_keyboard(order.id)
+        if send_search is not None:
+            send_search(session, order, text, keyboard=keyboard)
+            return
+        creator = session.get(User, order.passenger_id)
+        if creator:
+            vk.send_message(creator.vk_id, text, keyboard=keyboard)
+
     # A driver may become free or select a line between the initial lookup and
     # this fallback. Recheck before exposing the order as parallel: an eligible
     # free driver must always receive the ordinary offer first.
@@ -1111,11 +1183,7 @@ def _handle_no_driver(session: Session, order: Order) -> None:
         log.info("Free driver appeared before parallel fallback: order=%s", order.id)
         creator = session.get(User, order.passenger_id)
         if creator and not order.dispatcher_id:
-            vk.send_message(
-                creator.vk_id,
-                "⏰ Минутку…",
-                keyboard=kb.passenger_waiting_keyboard(order.id),
-            )
+            send_waiting_notice("⏰ Минутку…")
         offer_to_next_driver(session, order)
         return
 
@@ -1228,11 +1296,9 @@ def _handle_no_driver(session: Session, order: Order) -> None:
             session, order, recheck_village=True
         )
     if creator:
-        vk.send_message(
-            creator.vk_id,
+        send_waiting_notice(
             "⏰ Минутку…" if order.offered_driver_id or order.driver_id else
-            "⏰ Чуть подождать, первый свободный, возьмет вашу заявку…",
-            keyboard=kb.passenger_waiting_keyboard(order.id),
+            "⏰ Чуть подождать, первый свободный, возьмет вашу заявку…"
         )
 
 
