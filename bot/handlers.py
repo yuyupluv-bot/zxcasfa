@@ -605,6 +605,12 @@ def _handle_message_impl(session: Session, event) -> None:
                 return _driver_offer_lock_notice(session, user, pending_offer)
         if cmd in allowed_conversation_cmds and not abuse_service.allow_event(session, user, payload):
             return
+        if user.has_role(ROLE_DRIVER) and command in ("!график", "!график завтра"):
+            return driver_schedule_service.send_chat_schedule(
+                session,
+                peer_id,
+                "tomorrow" if command == "!график завтра" else "today",
+            )
         if cmd == "booking_take":
             if not user.has_role(ROLE_DRIVER):
                 return vk.send_message(vk_id, "Взять бронь может только водитель.")

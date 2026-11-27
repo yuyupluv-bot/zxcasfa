@@ -560,12 +560,15 @@ def driver_menu(
         ]
         if has_taken_bookings:
             rows.append([_btn("🗓 Мои брони", GREEN, {"cmd": "bookings_taken"})])
+        rows[2] = [
+            _btn("⚙ Настройки", WHITE, {"cmd": "driver_settings"}),
+            _btn("🗓 График", BLUE, {"cmd": "driver_schedule"}),
+        ]
         rows.append([
             _btn("🛡 Уйти с линии", RED, {"cmd": "driver_offline"}),
             _btn("☕ Отлучиться", WHITE, {"cmd": "driver_away"}),
         ])
         rows.append([_btn("📋 Мои сведения", WHITE, {"cmd": "driver_info"})])
-        rows.append([_btn("🗓 График", BLUE, {"cmd": "driver_schedule"})])
         if show_role_switch:
             rows.append(_role_switch_row())
     else:
@@ -585,8 +588,10 @@ def driver_menu(
             _btn("🏷 Прайс", WHITE, {"cmd": "price"}),
             _btn("⏳ Ожидающие", BLUE, {"cmd": "pending_orders"}),
         ])
-        rows.append([_btn("⚙ Настройки", WHITE, {"cmd": "driver_settings"})])
-        rows.append([_btn("🗓 График", BLUE, {"cmd": "driver_schedule"})])
+        rows.append([
+            _btn("⚙ Настройки", WHITE, {"cmd": "driver_settings"}),
+            _btn("🗓 График", BLUE, {"cmd": "driver_schedule"}),
+        ])
         if show_role_switch:
             rows.append(_role_switch_row())
     return keyboard(rows)
@@ -650,12 +655,14 @@ def driver_away_menu(
             _btn("⭐ Мои отзывы", WHITE, {"cmd": "reviews"}),
             _btn("🏷 Прайс", WHITE, {"cmd": "price"}),
         ],
-        [_btn("⚙ Настройки", WHITE, {"cmd": "driver_settings"})],
+        [
+            _btn("⚙ Настройки", WHITE, {"cmd": "driver_settings"}),
+            _btn("🗓 График", BLUE, {"cmd": "driver_schedule"}),
+        ],
         [_btn("🛡 Уйти с линии", RED, {"cmd": "driver_offline"})],
     ]
     if has_taken_bookings:
         rows.insert(3, [_btn("🗓 Мои брони", GREEN, {"cmd": "bookings_taken"})])
-    rows.append([_btn("🗓 График", BLUE, {"cmd": "driver_schedule"})])
     if show_role_switch:
         rows.append(_role_switch_row())
     return keyboard(rows)
@@ -679,6 +686,10 @@ def driver_schedule_day(day: str, has_marks: bool = False) -> str:
         else "📝 Отметиться"
     )
     return keyboard([
+        [
+            _btn("Сегодня", BLUE, {"cmd": "driver_schedule_day", "day": "today"}),
+            _btn("Завтра", BLUE, {"cmd": "driver_schedule_day", "day": "tomorrow"}),
+        ],
         [_btn(label, GREEN, {"cmd": "driver_schedule_edit", "day": day, "page": 1})],
         [_btn("⬅️ Вернуться в главное меню", WHITE, {"cmd": "start"})],
     ])
@@ -729,6 +740,15 @@ def driver_schedule_slots(day: str, marks: set[int], page: int = 1) -> str:
     })])
     rows.append([_btn("⬅️ Вернуться в график", WHITE, {"cmd": "driver_schedule"})])
     return keyboard(rows)
+
+
+def driver_schedule_reminder_keyboard() -> str:
+    return keyboard([
+        [_btn("🗓 График", BLUE, {
+            "cmd": "driver_schedule_day",
+            "day": "tomorrow",
+        })],
+    ])
 
 
 def booking_only_cancel_keyboard() -> str:

@@ -41,7 +41,7 @@ from common.logger import get_logger
 # parent package"). The sys.path bootstrap above puts the project root on the
 # path, so `bot` is importable as a package.
 from bot.handlers import handle_group_join, handle_message
-from bot import accept_timeout_service, away_order_notice_service, booking_service, driver_away_timeout_service, maintenance_service, order_service, outbox_service, parallel_orders, passenger_queue, rating_expiry_service, rotating_posts_service, temporary_driver_service
+from bot import accept_timeout_service, away_order_notice_service, booking_service, driver_away_timeout_service, driver_schedule_service, maintenance_service, order_service, outbox_service, parallel_orders, passenger_queue, rating_expiry_service, rotating_posts_service, temporary_driver_service
 from bot.vk_client import vk
 
 log = get_logger("bot.main")
@@ -236,6 +236,7 @@ def run() -> None:
     away_order_notice_service.start_worker()
     from bot import shortage_notice_service
     shortage_notice_service.start_worker()
+    driver_schedule_service.start_worker()
     parallel_orders.start_notice_worker()
     passenger_queue.start_worker()
     booking_service.start_reminder_worker()
