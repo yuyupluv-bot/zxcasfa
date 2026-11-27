@@ -161,7 +161,7 @@ def schedule_text(
                 if hour in by_hour
             ]
             for start, end, names in _ranges(values):
-                label = ", ".join(f"[id{vk_id}|{name}]" for vk_id, name in names)
+                label = ", ".join(name for _vk_id, name in names)
                 lines.append(f"• {_hour_label(start)}" if start == end else
                              f"• {_hour_label(start).split('–')[0]}–{_hour_label(end).split('–')[1]}")
                 lines[-1] += f" — {label}"
@@ -191,6 +191,7 @@ def schedule_text(
         .all()
     )
     if off_rows:
+        lines.append("")
         if chat:
             names = ", ".join(
                 _display_name(int(user_id), full_name)
@@ -203,9 +204,10 @@ def schedule_text(
             )
     dispatcher = _dispatcher_for_date(session, schedule_date)
     if dispatcher:
+        lines.append("")
         _row, user = dispatcher
         lines.append(
-            f"🎧 Диспетчер — {_mention(int(user.vk_id), user.full_name)}"
+            f"🎧 Диспетчер — {_display_name(int(user.id), user.full_name)}"
         )
     return "\n".join(lines)
 
