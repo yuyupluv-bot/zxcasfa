@@ -14,6 +14,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Date,
     Float,
     ForeignKey,
     Integer,
@@ -184,6 +185,35 @@ class User(Base):
         """Human-readable car description: «марка, цвет, номер» (req. 6)."""
         parts = [p for p in (self.car_model, self.car_color, self.car_number) if p]
         return ", ".join(parts) if parts else "\u2014"
+
+
+class DriverScheduleMark(Base):
+    """One hourly availability mark in a driver's reference schedule."""
+
+    __tablename__ = "driver_schedule_marks"
+
+    id = Column(Integer, primary_key=True)
+    driver_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    schedule_date = Column(Date, nullable=False, index=True)
+    hour = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
+
+    driver = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "driver_id",
+            "schedule_date",
+            "hour",
+            name="uq_driver_schedule_mark",
+        ),
+        CheckConstraint("hour >= 0 AND hour <= 23", name="ck_driver_schedule_hour"),
+    )
 
 
 class AdminUser(Base):

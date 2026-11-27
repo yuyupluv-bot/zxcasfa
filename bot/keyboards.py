@@ -565,6 +565,9 @@ def driver_menu(
             _btn("☕ Отлучиться", WHITE, {"cmd": "driver_away"}),
         ])
         rows.append([_btn("📋 Мои сведения", WHITE, {"cmd": "driver_info"})])
+        rows.append([_btn("🗓 График", BLUE, {"cmd": "driver_schedule"})])
+        if show_role_switch:
+            rows.append(_role_switch_row())
     else:
         rows = [
             [
@@ -582,13 +585,10 @@ def driver_menu(
             _btn("🏷 Прайс", WHITE, {"cmd": "price"}),
             _btn("⏳ Ожидающие", BLUE, {"cmd": "pending_orders"}),
         ])
+        rows.append([_btn("⚙ Настройки", WHITE, {"cmd": "driver_settings"})])
+        rows.append([_btn("🗓 График", BLUE, {"cmd": "driver_schedule"})])
         if show_role_switch:
-            rows.append([
-                _btn("⚙ Настройки", WHITE, {"cmd": "driver_settings"}),
-                _btn("🔁 Сменить роль", WHITE, {"cmd": "change_role"}),
-            ])
-        else:
-            rows.append([_btn("⚙ Настройки", WHITE, {"cmd": "driver_settings"})])
+            rows.append(_role_switch_row())
     return keyboard(rows)
 
 
@@ -655,8 +655,79 @@ def driver_away_menu(
     ]
     if has_taken_bookings:
         rows.insert(3, [_btn("🗓 Мои брони", GREEN, {"cmd": "bookings_taken"})])
+    rows.append([_btn("🗓 График", BLUE, {"cmd": "driver_schedule"})])
     if show_role_switch:
         rows.append(_role_switch_row())
+    return keyboard(rows)
+
+
+def driver_schedule_menu(tomorrow_has_marks: bool = False) -> str:
+    tomorrow_label = "✏️ Изменить отметку" if tomorrow_has_marks else "Завтра"
+    return keyboard([
+        [
+            _btn("Сегодня", BLUE, {"cmd": "driver_schedule_day", "day": "today"}),
+            _btn(tomorrow_label, BLUE, {"cmd": "driver_schedule_day", "day": "tomorrow"}),
+        ],
+        [_btn("⬅️ Вернуться в главное меню", WHITE, {"cmd": "start"})],
+    ])
+
+
+def driver_schedule_day(day: str, has_marks: bool = False) -> str:
+    label = (
+        "✏️ Изменить отметку"
+        if day == "today" or has_marks
+        else "📝 Отметиться"
+    )
+    return keyboard([
+        [_btn(label, GREEN, {"cmd": "driver_schedule_edit", "day": day, "page": 1})],
+        [_btn("⬅️ Вернуться в главное меню", WHITE, {"cmd": "start"})],
+    ])
+
+
+def _schedule_hour_label(hour: int) -> str:
+    return f"{hour:02d}:00–{(hour + 1) % 24:02d}:00"
+
+
+def driver_schedule_slots(day: str, marks: set[int], page: int = 1) -> str:
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+    page = max(1, min(3, page))
+    start = (page - 1) * 8
+    rows = []
+    for hour in range(start, min(24, start + 8), 2):
+        row = []
+        for value in (hour, hour + 1):
+            if value >= 24:
+                continue
+            prefix = "✅" if value in marks else "▫️"
+            row.append(_btn(
+                f"{prefix} {_schedule_hour_label(value)}",
+                GREEN if value in marks else WHITE,
+                {
+                    "cmd": "driver_schedule_toggle",
+                    "day": day,
+                    "hour": value,
+                    "page": page,
+                },
+            ))
+        rows.append(row)
+    nav = []
+    if page > 1:
+        nav.append(_btn("⬅️ Назад", WHITE, {
+            "cmd": "driver_schedule_edit", "day": day, "page": page - 1,
+        }))
+    if page < 3:
+        nav.append(_btn("Вперёд ➡️", WHITE, {
+            "cmd": "driver_schedule_edit", "day": day, "page": page + 1,
+        }))
+    if nav:
+        rows.append(nav)
+    rows.append([_btn("✅ Готово", GREEN, {
+        "cmd": "driver_schedule_day", "day": day,
+    })])
+    rows.append([_btn("⬅️ Вернуться в график", WHITE, {"cmd": "driver_schedule"})])
     return keyboard(rows)
 
 

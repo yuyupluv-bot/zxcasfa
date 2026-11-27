@@ -328,7 +328,7 @@ class DispatchRegressionTests(unittest.TestCase):
                         if isinstance(t,ast.Name):scope[t.id]=ast.literal_eval(node.value)
             if scope.get('revision'):revisions[scope['revision']]=scope['down_revision']
         heads=set(revisions)-set(revisions.values())
-        self.assertEqual(heads,{'0059_driver_blacklist'})
+        self.assertEqual(heads,{'0060_driver_schedule'})
         text=source('migrations/versions/0059_driver_blacklist.py')
         upgrade=text.split('def upgrade():',1)[1].split('def downgrade():',1)[0]
         self.assertNotIn('drop_',upgrade)

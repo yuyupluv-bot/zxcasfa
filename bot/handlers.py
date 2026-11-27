@@ -66,6 +66,7 @@ from . import (
     parallel_orders,
     passenger_queue,
     queue_service,
+    driver_schedule_service,
     temporary_driver_service,
     timers,
     verification,
@@ -292,6 +293,8 @@ _DRIVER_MENU_CMDS = {
     "fake_calls", "driver_statistics", "driver_online", "driver_offline",
     "pending_orders", "driver_info", "blacklist", "blacklist_add",
     "blacklist_remove_menu", "blacklist_remove", "blacklist_close",
+    "driver_schedule", "driver_schedule_day", "driver_schedule_edit",
+    "driver_schedule_toggle",
 }
 # Ordinary offer decisions; unrelated menu commands stay locked.
 _DRIVER_OFFER_ALLOWED_CMDS = {"accept", "decline", "decline_reason", "decline_back", "offer_eta", "offer_eta_custom"}
@@ -3228,7 +3231,7 @@ def passenger_arrived_reply(
             vk.send_message(driver.vk_id, "\U0001F6B6 Пассажир выходит.")
         vk.send_message(
             user.vk_id,
-            "Хорошо, водитель предупреждён.",
+            "✅ Водитель уведомлён: вы выходите.",
             keyboard=kb.passenger_in_ride_keyboard(order.id),
         )
     else:
@@ -3480,6 +3483,25 @@ def handle_driver(session, user, state, text, payload, attachments):
         return driver_go_away(session, user)
     if cmd == "driver_settings":
         return driver_show_settings(session, user)
+    if cmd == "driver_schedule":
+        return driver_schedule_service.show_menu(session, user)
+    if cmd == "driver_schedule_day":
+        return driver_schedule_service.show_day(session, user, payload.get("day"))
+    if cmd == "driver_schedule_edit":
+        return driver_schedule_service.edit_day(
+            session,
+            user,
+            payload.get("day"),
+            payload.get("page", 1),
+        )
+    if cmd == "driver_schedule_toggle":
+        return driver_schedule_service.toggle(
+            session,
+            user,
+            payload.get("day"),
+            payload.get("hour"),
+            payload.get("page", 1),
+        )
     if cmd == "driver_gender":
         return driver_gender_prompt(session, user, return_to="settings")
     if cmd == "set_driver_gender":

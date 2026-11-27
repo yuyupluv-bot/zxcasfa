@@ -330,6 +330,16 @@ def ensure_columns() -> bool:
             attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""",
+        """CREATE TABLE IF NOT EXISTS driver_schedule_marks (
+            id SERIAL PRIMARY KEY,
+            driver_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            schedule_date DATE NOT NULL,
+            hour INTEGER NOT NULL CHECK (hour >= 0 AND hour <= 23),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (driver_id, schedule_date, hour)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_driver_schedule_marks_driver_id ON driver_schedule_marks(driver_id)",
+        "CREATE INDEX IF NOT EXISTS ix_driver_schedule_marks_schedule_date ON driver_schedule_marks(schedule_date)",
         """CREATE TABLE IF NOT EXISTS login_attempts (
             id SERIAL PRIMARY KEY, ip_address VARCHAR(64) NOT NULL,
             login VARCHAR(120) NOT NULL, success BOOLEAN NOT NULL DEFAULT FALSE,
