@@ -45,16 +45,29 @@ def _today() -> dt.date:
 
 
 def _date_for(day: str | None) -> dt.date:
-    return _today() + dt.timedelta(days=1 if day == "tomorrow" else 0)
+    offset = {
+        "tomorrow": 1,
+        "after_tomorrow": 2,
+    }.get(day, 0)
+    return _today() + dt.timedelta(days=offset)
 
 
 def _day_token(value: dt.date) -> str:
-    return "tomorrow" if value == _today() + dt.timedelta(days=1) else "today"
+    today = _today()
+    if value == today + dt.timedelta(days=2):
+        return "after_tomorrow"
+    if value == today + dt.timedelta(days=1):
+        return "tomorrow"
+    return "today"
 
 
 def _day_title(value: dt.date) -> str:
     token = _day_token(value)
-    label = "сегодня" if token == "today" else "завтра"
+    label = {
+        "today": "сегодня",
+        "tomorrow": "завтра",
+        "after_tomorrow": "послезавтра",
+    }[token]
     return f"{label} ({value.strftime('%d.%m')})"
 
 
@@ -229,7 +242,12 @@ def marks_for(
 
 
 def _valid_date(schedule_date: dt.date) -> bool:
-    return schedule_date in (_today(), _today() + dt.timedelta(days=1))
+    today = _today()
+    return schedule_date in (
+        today,
+        today + dt.timedelta(days=1),
+        today + dt.timedelta(days=2),
+    )
 
 
 def show_menu(session: Session, driver: User) -> None:
@@ -336,7 +354,7 @@ def toggle(
         return show_menu(session, driver)
 
     off_row = None
-    if schedule_date == _today() + dt.timedelta(days=1):
+    if schedule_date > _today():
         off_row = (
             session.query(DriverScheduleOff)
             .filter(
@@ -391,7 +409,7 @@ def toggle_not_working(
     day: str | None,
 ) -> None:
     schedule_date = _date_for(day)
-    if schedule_date != _today() + dt.timedelta(days=1):
+    if schedule_date <= _today() or schedule_date > _today() + dt.timedelta(days=2):
         return show_day(session, driver, "today")
     row = (
         session.query(DriverScheduleOff)

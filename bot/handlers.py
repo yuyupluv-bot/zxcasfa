@@ -605,11 +605,14 @@ def _handle_message_impl(session: Session, event) -> None:
                 return _driver_offer_lock_notice(session, user, pending_offer)
         if cmd in allowed_conversation_cmds and not abuse_service.allow_event(session, user, payload):
             return
-        if command in ("!график", "!график завтра"):
+        if command in ("!график", "!график завтра", "!график послезавтра"):
             return driver_schedule_service.send_chat_schedule(
                 session,
                 peer_id,
-                "tomorrow" if command == "!график завтра" else "today",
+                {
+                    "!график завтра": "tomorrow",
+                    "!график послезавтра": "after_tomorrow",
+                }.get(command, "today"),
             )
         if command == "!кто не отметился":
             if user.has_role(ROLE_ADMIN) or user.vk_id in config.ADMIN_VK_IDS:

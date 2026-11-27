@@ -140,7 +140,8 @@ def dispatch_new_order(session: Session, order: Order) -> None:
     """
     def send_waiting_notice(text: str) -> None:
         """Send a tracked notice in production, plain VK in legacy harnesses."""
-        sender = getattr(order_service, "send_search_notice", None)
+        service = globals().get("order_service")
+        sender = getattr(service, "send_search_notice", None)
         keyboard = kb.passenger_waiting_keyboard(order.id)
         if sender is not None:
             sender(session, order, text, keyboard=keyboard)
@@ -165,12 +166,15 @@ def dispatch_new_order(session: Session, order: Order) -> None:
                     blacklist.excluded_driver_ids(session, order.passenger_id)
                 ) if blacklist is not None else []
         ):
-            passenger = session.get(User, order.passenger_id)
-            if passenger and not order.dispatcher_id:
-                send_waiting_notice("⏰ Минутку…")
-            order_service.offer_to_next_driver(
+            # The offer routine retires the previous temporary passenger card.
+            # Send the new waiting card only after the offer is reserved,
+            # otherwise it is cancelled by offer_to_next_driver().
+            offered = order_service.offer_to_next_driver(
                 session, order, line_scope="exact", line_name=route_city
             )
+            passenger = session.get(User, order.passenger_id)
+            if offered and passenger and not order.dispatcher_id:
+                send_waiting_notice("⏰ Минутку…")
             return
         enqueue(session, order)
         passenger = session.get(User, order.passenger_id)
@@ -194,10 +198,10 @@ def dispatch_new_order(session: Session, order: Order) -> None:
         return
 
     if order_service.has_eligible_waiting_driver(session, order):
+        offered = order_service.offer_to_next_driver(session, order)
         passenger = session.get(User, order.passenger_id)
-        if passenger and not order.dispatcher_id:
+        if offered and passenger and not order.dispatcher_id:
             send_waiting_notice("⏰ Минутку…")
-        order_service.offer_to_next_driver(session, order)
         return
 
     # ``offer_to_next_driver`` parks the order through _handle_no_driver when

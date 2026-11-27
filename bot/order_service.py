@@ -346,12 +346,27 @@ def send_search_notice(
         passenger = session.get(User, order.passenger_id) if order.passenger_id else None
     if not passenger:
         return None
-    order.search_notice_outbox_id = vk.send_tracked_message(
+    outbox_id = vk.send_tracked_message(
         passenger.vk_id,
         text,
         keyboard=keyboard,
     )
-    return order.search_notice_outbox_id
+    if outbox_id:
+        order.search_notice_outbox_id = outbox_id
+        return outbox_id
+
+    # A missing current DB session must not make the passenger lose the
+    # status card. send_message uses the same outbox when possible and falls
+    # back to an immediate VK send only outside a transaction. There is no
+    # pointer to retain in this fallback, so later cleanup remains harmless.
+    log.error(
+        "Could not enqueue tracked passenger search notice for order=%s; "
+        "using untracked fallback",
+        order.id,
+    )
+    vk.send_message(passenger.vk_id, text, keyboard=keyboard)
+    order.search_notice_outbox_id = None
+    return None
 
 
 def clear_offer_notice(session: Session, order: Order) -> None:
@@ -1181,10 +1196,12 @@ def _handle_no_driver(session: Session, order: Order) -> None:
     # free driver must always receive the ordinary offer first.
     if has_eligible_waiting_driver(session, order):
         log.info("Free driver appeared before parallel fallback: order=%s", order.id)
+        offered = offer_to_next_driver(session, order)
         creator = session.get(User, order.passenger_id)
-        if creator and not order.dispatcher_id:
+        # offer_to_next_driver() clears the previous temporary card. The new
+        # one must be sent after it succeeds, or it disappears immediately.
+        if offered and creator and not order.dispatcher_id:
             send_waiting_notice("⏰ Минутку…")
-        offer_to_next_driver(session, order)
         return
 
     clear_offer_notice(session, order)

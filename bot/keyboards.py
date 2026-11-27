@@ -674,6 +674,10 @@ def driver_schedule_menu(tomorrow_has_marks: bool = False) -> str:
         [
             _btn("Сегодня", BLUE, {"cmd": "driver_schedule_day", "day": "today"}),
             _btn(tomorrow_label, BLUE, {"cmd": "driver_schedule_day", "day": "tomorrow"}),
+            _btn("Послезавтра", BLUE, {
+                "cmd": "driver_schedule_day",
+                "day": "after_tomorrow",
+            }),
         ],
         [_btn("⬅️ Вернуться в главное меню", WHITE, {"cmd": "start"})],
     ])
@@ -693,12 +697,17 @@ def driver_schedule_day(
         [
             _btn("Сегодня", BLUE, {"cmd": "driver_schedule_day", "day": "today"}),
             _btn("Завтра", BLUE, {"cmd": "driver_schedule_day", "day": "tomorrow"}),
+            _btn("Послезавтра", BLUE, {
+                "cmd": "driver_schedule_day",
+                "day": "after_tomorrow",
+            }),
         ],
         [_btn(label, GREEN, {"cmd": "driver_schedule_edit", "day": day, "page": 1})],
     ]
-    if day == "tomorrow":
+    if day in ("tomorrow", "after_tomorrow"):
+        off_label = "Не работаю завтра" if day == "tomorrow" else "Не работаю послезавтра"
         rows.append([_btn(
-            "✅ Не работаю завтра" if is_off else "🚫 Не работаю завтра",
+            f"✅ {off_label}" if is_off else f"🚫 {off_label}",
             GREEN if is_off else RED,
             {"cmd": "driver_schedule_off_toggle", "day": day},
         )])
@@ -751,9 +760,10 @@ def driver_schedule_slots(
         }))
     if nav:
         rows.append(nav)
-    if day == "tomorrow":
+    if day in ("tomorrow", "after_tomorrow"):
+        off_label = "Не работаю завтра" if day == "tomorrow" else "Не работаю послезавтра"
         rows.append([_btn(
-            "✅ Не работаю завтра" if is_off else "🚫 Не работаю завтра",
+            f"✅ {off_label}" if is_off else f"🚫 {off_label}",
             GREEN if is_off else RED,
             {"cmd": "driver_schedule_off_toggle", "day": day},
         )])
