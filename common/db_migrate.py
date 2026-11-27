@@ -340,6 +340,23 @@ def ensure_columns() -> bool:
         )""",
         "CREATE INDEX IF NOT EXISTS ix_driver_schedule_marks_driver_id ON driver_schedule_marks(driver_id)",
         "CREATE INDEX IF NOT EXISTS ix_driver_schedule_marks_schedule_date ON driver_schedule_marks(schedule_date)",
+        """CREATE TABLE IF NOT EXISTS driver_schedule_off (
+            id SERIAL PRIMARY KEY,
+            driver_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            schedule_date DATE NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (driver_id, schedule_date)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_driver_schedule_off_driver_id ON driver_schedule_off(driver_id)",
+        "CREATE INDEX IF NOT EXISTS ix_driver_schedule_off_schedule_date ON driver_schedule_off(schedule_date)",
+        """CREATE TABLE IF NOT EXISTS driver_schedule_dispatchers (
+            id SERIAL PRIMARY KEY,
+            dispatcher_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            week_start DATE NOT NULL UNIQUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_driver_schedule_dispatchers_dispatcher_id ON driver_schedule_dispatchers(dispatcher_id)",
+        "CREATE INDEX IF NOT EXISTS ix_driver_schedule_dispatchers_week_start ON driver_schedule_dispatchers(week_start)",
         """CREATE TABLE IF NOT EXISTS login_attempts (
             id SERIAL PRIMARY KEY, ip_address VARCHAR(64) NOT NULL,
             login VARCHAR(120) NOT NULL, success BOOLEAN NOT NULL DEFAULT FALSE,

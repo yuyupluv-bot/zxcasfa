@@ -294,7 +294,7 @@ _DRIVER_MENU_CMDS = {
     "pending_orders", "driver_info", "blacklist", "blacklist_add",
     "blacklist_remove_menu", "blacklist_remove", "blacklist_close",
     "driver_schedule", "driver_schedule_day", "driver_schedule_edit",
-    "driver_schedule_toggle",
+    "driver_schedule_toggle", "driver_schedule_off_toggle",
 }
 # Ordinary offer decisions; unrelated menu commands stay locked.
 _DRIVER_OFFER_ALLOWED_CMDS = {"accept", "decline", "decline_reason", "decline_back", "offer_eta", "offer_eta_custom"}
@@ -605,12 +605,16 @@ def _handle_message_impl(session: Session, event) -> None:
                 return _driver_offer_lock_notice(session, user, pending_offer)
         if cmd in allowed_conversation_cmds and not abuse_service.allow_event(session, user, payload):
             return
-        if user.has_role(ROLE_DRIVER) and command in ("!график", "!график завтра"):
+        if command in ("!график", "!график завтра"):
             return driver_schedule_service.send_chat_schedule(
                 session,
                 peer_id,
                 "tomorrow" if command == "!график завтра" else "today",
             )
+        if command == "!кто не отметился":
+            if user.has_role(ROLE_ADMIN) or user.vk_id in config.ADMIN_VK_IDS:
+                return driver_schedule_service.send_unmarked_chat(session, peer_id)
+            return
         if cmd == "booking_take":
             if not user.has_role(ROLE_DRIVER):
                 return vk.send_message(vk_id, "Взять бронь может только водитель.")
@@ -791,7 +795,14 @@ def show_main_menu(session: Session, user: User) -> None:
         vk.send_message(user.vk_id, "🛠 Меню администратора:", keyboard=kb.admin_menu(switch))
         set_state(session, user.vk_id, States.ADM_MENU)
     elif user.role == ROLE_DISPATCHER:
-        vk.send_message(user.vk_id, "📋 Меню диспетчера:", keyboard=kb.dispatcher_menu(switch))
+        vk.send_message(
+            user.vk_id,
+            "📋 Меню диспетчера:",
+            keyboard=kb.dispatcher_menu(
+                switch,
+                driver_schedule_service.is_week_dispatcher(session, user),
+            ),
+        )
         set_state(session, user.vk_id, States.DISP_MENU)
     elif user.role == ROLE_DRIVER:
         if user.driver_gender not in ("male", "female"):
@@ -3507,6 +3518,12 @@ def handle_driver(session, user, state, text, payload, attachments):
             payload.get("day"),
             payload.get("hour"),
             payload.get("page", 1),
+        )
+    if cmd == "driver_schedule_off_toggle":
+        return driver_schedule_service.toggle_not_working(
+            session,
+            user,
+            payload.get("day"),
         )
     if cmd == "driver_gender":
         return driver_gender_prompt(session, user, return_to="settings")
@@ -6497,6 +6514,9 @@ def _handle_dispatcher_report(session, user, state, text, payload, attachments):
 
 def handle_dispatcher(session, user, state, text, payload, attachments):
     cmd = payload.get("cmd")
+
+    if cmd == "dispatcher_schedule_claim":
+        return driver_schedule_service.claim_dispatcher_week(session, user)
 
     # «Отправить отчет водителям»: one message containing text and a photo.
     if state in _DISPATCHER_REPORT_STATES or cmd == "disp_driver_report":

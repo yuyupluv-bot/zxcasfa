@@ -216,6 +216,50 @@ class DriverScheduleMark(Base):
     )
 
 
+class DriverScheduleOff(Base):
+    """A driver's explicit «not working» mark for one calendar date."""
+
+    __tablename__ = "driver_schedule_off"
+
+    id = Column(Integer, primary_key=True)
+    driver_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    schedule_date = Column(Date, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
+
+    driver = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "driver_id",
+            "schedule_date",
+            name="uq_driver_schedule_off",
+        ),
+    )
+
+
+class DriverScheduleDispatcher(Base):
+    """The dispatcher shown at the bottom of a schedule for one week."""
+
+    __tablename__ = "driver_schedule_dispatchers"
+
+    id = Column(Integer, primary_key=True)
+    dispatcher_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    week_start = Column(Date, nullable=False, unique=True, index=True)
+    created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
+
+    dispatcher = relationship("User")
+
+
 class AdminUser(Base):
     __tablename__ = "admin_users"
 

@@ -679,27 +679,43 @@ def driver_schedule_menu(tomorrow_has_marks: bool = False) -> str:
     ])
 
 
-def driver_schedule_day(day: str, has_marks: bool = False) -> str:
+def driver_schedule_day(
+    day: str,
+    has_marks: bool = False,
+    is_off: bool = False,
+) -> str:
     label = (
         "✏️ Изменить отметку"
         if day == "today" or has_marks
         else "📝 Отметиться"
     )
-    return keyboard([
+    rows = [
         [
             _btn("Сегодня", BLUE, {"cmd": "driver_schedule_day", "day": "today"}),
             _btn("Завтра", BLUE, {"cmd": "driver_schedule_day", "day": "tomorrow"}),
         ],
         [_btn(label, GREEN, {"cmd": "driver_schedule_edit", "day": day, "page": 1})],
-        [_btn("⬅️ Вернуться в главное меню", WHITE, {"cmd": "start"})],
-    ])
+    ]
+    if day == "tomorrow":
+        rows.append([_btn(
+            "✅ Не работаю завтра" if is_off else "🚫 Не работаю завтра",
+            GREEN if is_off else RED,
+            {"cmd": "driver_schedule_off_toggle", "day": day},
+        )])
+    rows.append([_btn("⬅️ Вернуться в главное меню", WHITE, {"cmd": "start"})])
+    return keyboard(rows)
 
 
 def _schedule_hour_label(hour: int) -> str:
     return f"{hour:02d}:00–{(hour + 1) % 24:02d}:00"
 
 
-def driver_schedule_slots(day: str, marks: set[int], page: int = 1) -> str:
+def driver_schedule_slots(
+    day: str,
+    marks: set[int],
+    page: int = 1,
+    is_off: bool = False,
+) -> str:
     try:
         page = int(page)
     except (TypeError, ValueError):
@@ -735,6 +751,12 @@ def driver_schedule_slots(day: str, marks: set[int], page: int = 1) -> str:
         }))
     if nav:
         rows.append(nav)
+    if day == "tomorrow":
+        rows.append([_btn(
+            "✅ Не работаю завтра" if is_off else "🚫 Не работаю завтра",
+            GREEN if is_off else RED,
+            {"cmd": "driver_schedule_off_toggle", "day": day},
+        )])
     rows.append([_btn("✅ Готово", GREEN, {
         "cmd": "driver_schedule_day", "day": day,
     })])
@@ -1088,7 +1110,10 @@ def chat_keyboard() -> str:
 # --------------------------------------------------------------------------- #
 #  Dispatcher                                                                  #
 # --------------------------------------------------------------------------- #
-def dispatcher_menu(show_role_switch: bool = False) -> str:
+def dispatcher_menu(
+    show_role_switch: bool = False,
+    dispatcher_schedule_active: bool = False,
+) -> str:
     rows = [
         [_btn("📝 Новая заявка", GREEN, {"cmd": "disp_new_order"})],
         [_btn("📋 Мои заявки", BLUE, {"cmd": "disp_orders"})],
@@ -1101,6 +1126,11 @@ def dispatcher_menu(show_role_switch: bool = False) -> str:
             _btn("🏷 Прайс", WHITE, {"cmd": "price"}),
         ],
         [_btn("📤 Отправить отчет водителям", BLUE, {"cmd": "disp_driver_report"})],
+        [_btn(
+            "✅ Я диспетчер" if dispatcher_schedule_active else "🎧 Я диспетчер",
+            GREEN if dispatcher_schedule_active else BLUE,
+            {"cmd": "dispatcher_schedule_claim"},
+        )],
     ]
     if show_role_switch:
         rows.append(_role_switch_row())
