@@ -299,7 +299,10 @@ def send_unmarked_chat(session: Session, peer_id: int) -> None:
         .all()
     )
     names = [
-        _mention(int(driver.id), driver.full_name)
+        # VK mentions must use the public VK user id, not our internal
+        # database primary key.  Most users happen to have different values,
+        # which made some names render as broken ``@id<number>`` mentions.
+        _mention(int(driver.vk_id), driver.full_name)
         for driver in drivers
         if driver.has_role(ROLE_DRIVER)
         and driver.id not in off_ids
@@ -527,7 +530,10 @@ def _worker() -> None:
     while True:
         try:
             with session_scope() as session:
-                first = _send_reminder_once(session, 18, False)
+                # Both reminders are only for drivers who have not made any
+                # mark for tomorrow.  Sending the 18:00 reminder to everyone
+                # also reached drivers who had already filled in the schedule.
+                first = _send_reminder_once(session, 18, True)
                 second = _send_reminder_once(session, 20, True)
                 if first or second:
                     log.info(

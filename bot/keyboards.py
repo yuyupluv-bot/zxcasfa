@@ -775,12 +775,15 @@ def driver_schedule_slots(
 
 
 def driver_schedule_reminder_keyboard() -> str:
+    # This is an inline keyboard attached to the reminder message.  A regular
+    # keyboard would replace the driver's persistent menu until another
+    # message restores it.
     return keyboard([
         [_btn("🗓 График", BLUE, {
             "cmd": "driver_schedule_day",
             "day": "tomorrow",
         })],
-    ])
+    ], inline=True)
 
 
 def booking_only_cancel_keyboard() -> str:
